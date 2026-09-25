@@ -1,2 +1,5 @@
 azure-functions
 azure-functions-durable>=1.2.0,<2
+azure-identity>=1.16.0,<2
+azure-keyvault-secrets>=4.8.0,<5
+pyodbc>=5.1.0,<6

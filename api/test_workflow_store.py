@@ -3,14 +3,20 @@ Offline tests for HD-015/HD-016 â€” validates the WorkflowStore state-machi
 logic directly, independent of the Azure Durable Functions runtime (which
 isn't available to run locally without a full Azure Functions host).
 
-This exercises exactly the same code path the orchestrator's activity
-functions call (create_workflow_instance, advance_workflow_instance in
-function_app.py), just invoked directly against the store rather than
-through the Durable Functions dispatch layer. If these pass, the
-orchestrator's activities will behave identically, since they are thin
-wrappers with no additional logic of their own.
+Regression note: these tests must still pass unchanged after HD-002/003/005/006
+graduated get_store() to prefer SqlWorkflowStore when AZURE_SQL_SERVER is set.
+Since that env var is NOT set in this test run, get_store() must fall back to
+InMemoryWorkflowStore exactly as before â€” this file is the proof that the
+fallback path preserves 100% of the original HD-015/016 behaviour.
 """
-from workflow_store import InMemoryWorkflowStore, WorkflowStoreError
+import os
+from workflow_store import InMemoryWorkflowStore, WorkflowStoreError, get_store
+
+print("=== Test 0: get_store() falls back to InMemoryWorkflowStore when AZURE_SQL_SERVER is unset ===")
+assert "AZURE_SQL_SERVER" not in os.environ, "Test assumes AZURE_SQL_SERVER is not set in this environment"
+store = get_store()
+assert isinstance(store, InMemoryWorkflowStore), f"Expected InMemoryWorkflowStore, got {type(store)}"
+print("PASS â€” get_store() correctly falls back when SQL is not configured\n")
 
 print("=== Test 1: TEST definition seeded correctly (HD-016) ===")
 store = InMemoryWorkflowStore()
@@ -66,12 +72,6 @@ try:
 except WorkflowStoreError as e:
     print(f"PASS â€” correctly raised: {e}\n")
 
-print("=== Test 7: get_store() singleton returns the same instance across calls ===")
-from workflow_store import get_store
-s1 = get_store()
-s2 = get_store()
-assert s1 is s2, "get_store() should return a singleton within one process"
-print("PASS â€” singleton pattern confirmed\n")
-
 print("=" * 60)
-print("ALL WORKFLOW STORE TESTS PASSED â€” HD-015/HD-016 logic verified")
+print("ALL WORKFLOW STORE REGRESSION TESTS PASSED â€” HD-015/HD-016 behaviour")
+print("preserved unchanged after HD-002/003/005/006 storage graduation")

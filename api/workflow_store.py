@@ -1,6 +1,6 @@
 """
-IT Helpdesk Portal â€” Workflow Store (HD-015 / HD-016)
-=======================================================
+IT Helpdesk Portal â€” Workflow Store (HD-015 / HD-016, storage graduated in HD-002/003/005/006)
+=================================================================================================
 Defines the data model for workflow definitions and instances, plus a
 storage abstraction that the generic Durable Functions orchestrator reads
 from. This is the concrete implementation of the "configuration, not code"
@@ -9,21 +9,22 @@ contains zero category-specific logic â€” every workflow type (Hardware,
 Tender, Incident, and this TEST definition) is just a different row of
 data read through this same interface.
 
-IMPORTANT â€” scope note for this ticket (HD-015/HD-016):
-The MVP Specification's target data layer is Azure SQL (Section 7 of the
-MVP spec: ci_base, workflow_definition, workflow_instance, etc.), but those
-tables are provisioned under separate backlog items (HD-002 through
-HD-008) which have not been built yet in this deployment. Rather than
-block the orchestrator pattern on that infrastructure work, this ticket
-proves the pattern against a WorkflowStore *interface*, with an in-memory
-implementation for now. Swapping in a SqlWorkflowStore later (once HD-002
-â€“HD-008 land) requires no change to the orchestrator itself â€” only a
-different class satisfying the same interface. This mirrors the same
-"reuse, don't duplicate" principle already applied to the CMDB design.
+Storage backend history:
+- HD-015/HD-016 (original): InMemoryWorkflowStore only. Proven the
+  orchestrator pattern end-to-end, but data did not survive a Function App
+  restart â€” an accepted, explicit limitation at the time.
+- HD-002/HD-003/HD-005/HD-006 (this revision): get_store() now checks for
+  the AZURE_SQL_SERVER app setting. If present, it returns a durable
+  SqlWorkflowStore (see sql_workflow_store.py) backed by Azure SQL. If
+  absent, it falls back to InMemoryWorkflowStore unchanged â€” so this change
+  is safe to deploy even before the Azure SQL Database is provisioned; the
+  app setting is simply not set yet, and behaviour stays identical.
 """
 from __future__ import annotations
+import os
 import uuid
 import datetime
+import logging
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 
@@ -76,8 +77,8 @@ class WorkflowStoreError(Exception):
 
 
 class WorkflowStore:
-    """Abstract interface. A future SqlWorkflowStore (backed by Azure SQL,
-    per HD-002â€“HD-008) implements this exact same interface â€” the
+    """Abstract interface. SqlWorkflowStore (backed by Azure SQL, per
+    HD-002/003/005/006) implements this exact same interface â€” the
     orchestrator and API endpoints depend only on this contract, never on
     a specific storage technology."""
 
@@ -95,12 +96,10 @@ class WorkflowStore:
 
 
 class InMemoryWorkflowStore(WorkflowStore):
-    """Temporary implementation for HD-015/HD-016 only. Data does not
-    persist across Function App restarts â€” this is expected and acceptable
-    for this ticket's acceptance criteria, which only requires proving the
-    orchestrator pattern end-to-end, not durable cross-restart storage.
-    Durability across restarts arrives with the Azure SQL-backed store in
-    a later ticket."""
+    """Original HD-015/HD-016 implementation. Data does not persist across
+    Function App restarts. Retained as the safe fallback when Azure SQL is
+    not yet configured (AZURE_SQL_SERVER app setting absent) â€” see get_store()
+    below."""
 
     def __init__(self):
         self._definitions: Dict[str, WorkflowDefinition] = {}
@@ -109,8 +108,8 @@ class InMemoryWorkflowStore(WorkflowStore):
 
     def _seed_test_definition(self) -> None:
         """HD-016: seed a single TEST workflow_definition with 3 trivial
-        states (Start -> Middle -> End), matching this ticket's acceptance
-        criteria exactly."""
+        states (Start -> Middle -> End), matching the schema.sql seed exactly
+        so behaviour is identical whether backed by memory or SQL."""
         self._definitions["TEST"] = WorkflowDefinition(
             workflow_def_id="TEST",
             states=["Start", "Middle", "End"],
@@ -145,18 +144,35 @@ class InMemoryWorkflowStore(WorkflowStore):
         self._instances[instance.instance_id] = instance
 
 
-# Module-level singleton for MVP simplicity. NOTE: since Flex Consumption
-# can spin up multiple worker instances, this in-memory store is NOT
-# reliable across concurrent requests in production â€” this is a known,
-# accepted limitation of this ticket's scope (see class docstring above)
-# and is exactly why HD-002â€“HD-008 (Azure SQL CMDB) must land before any
-# real workflow type (Hardware, Tender, Incident) is built on top of this
-# orchestrator skeleton.
+# Module-level singleton. NOTE: for InMemoryWorkflowStore, this is not
+# reliable across concurrent Flex Consumption worker instances â€” this is why
+# HD-002/003/005/006 exist. Once AZURE_SQL_SERVER is set, get_store() returns
+# a SqlWorkflowStore instead, and this limitation no longer applies.
 _store_instance: Optional[WorkflowStore] = None
 
 
 def get_store() -> WorkflowStore:
     global _store_instance
-    if _store_instance is None:
-        _store_instance = InMemoryWorkflowStore()
+    if _store_instance is not None:
+        return _store_instance
+
+    if os.environ.get("AZURE_SQL_SERVER"):
+        try:
+            from sql_workflow_store import SqlWorkflowStore
+            _store_instance = SqlWorkflowStore()
+            logging.info("get_store: using SqlWorkflowStore (AZURE_SQL_SERVER is set)")
+            return _store_instance
+        except Exception:
+            # Fail safe, not silent: log loudly, then fall back to in-memory
+            # rather than crashing the whole Function App if SQL is
+            # misconfigured. This mirrors ai_summarizer.py's own graceful
+            # degradation pattern elsewhere in this codebase.
+            logging.exception(
+                "get_store: AZURE_SQL_SERVER is set but SqlWorkflowStore failed to "
+                "initialise. Falling back to InMemoryWorkflowStore. This means "
+                "workflow data will NOT persist across restarts until the "
+                "underlying SQL issue is fixed."
+            )
+
+    _store_instance = InMemoryWorkflowStore()
     return _store_instance
