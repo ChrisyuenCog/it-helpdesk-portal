@@ -1,0 +1,78 @@
+name: Deploy IT Helpdesk Portal API to Azure Functions
+
+# HD-009: this is the piece that closes the automation loop. Before this
+# file existed, merging a PR to main only updated GitHub â€” nothing pushed
+# the code to Azure. This workflow triggers on every merge to main and
+# publishes directly to the it-helpdesk-api Function App, so "merged" and
+# "deployed" finally mean the same thing.
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'api/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch: {}   # allows a manual re-run from the Actions tab without a new commit
+
+permissions:
+  id-token: write   # required for OIDC â€” GitHub issues a short-lived token for this run only
+  contents: read
+
+env:
+  AZURE_FUNCTIONAPP_NAME: 'it-helpdesk-api'
+  AZURE_FUNCTIONAPP_PACKAGE_PATH: 'api'
+  PYTHON_VERSION: '3.13'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Syntax check every Python file before deploying
+        # Cheap, fast safety net: catches a broken file BEFORE it reaches
+        # Azure, rather than discovering a syntax error only after
+        # deployment has already replaced the working version.
+        run: |
+          cd ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
+          for f in *.py; do
+            echo "Checking $f"
+            python -m py_compile "$f"
+          done
+
+      - name: Run offline test suites
+        # Same principle as the syntax check: fail the deploy here, not
+        # silently in production, if any offline test regresses. These are
+        # the exact test_*.py files already delivered alongside each
+        # ticket's code (HD-015 through HD-018 and beyond).
+        run: |
+          cd ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
+          for f in test_*.py; do
+            if [ -f "$f" ]; then
+              echo "Running $f"
+              python "$f"
+            fi
+          done
+
+      - name: 'Login to Azure via OIDC'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: 'Deploy to Azure Functions (it-helpdesk-api)'
+        uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
+          package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
+
+      - name: 'Azure logout'
+        run: az logout
+        if: always()
