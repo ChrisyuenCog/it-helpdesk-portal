@@ -1,0 +1,5 @@
+azure-functions
+azure-identity>=1.16.0,<2
+azure-keyvault-secrets>=4.8.0,<5
+azure-storage-blob>=12.19.0,<13
+requests>=2.31.0,<3
