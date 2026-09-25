@@ -1,17 +1,18 @@
 """
-IT Helpdesk Portal â€” Function App Entry Point
+IT Helpdesk Portal — Function App Entry Point
 ================================================
 HD-015: Generic Durable Functions orchestrator skeleton.
-HD-016: TEST workflow_definition seeded in workflow_store.py, proven here.
+HD-016: TEST workflow_definition seeded (see workflow_store.py / sql/schema.sql).
+HD-002/003/005/006: durable Azure SQL-backed storage, with safe in-memory fallback.
+HD-017: POST /api/workflow/start — the first real, externally-callable API
+         endpoint. Supersedes the HD-015 smoke-test starter
+         (workflow/smoketest/start), which is now removed.
 
 Design principle (per MVP Specification, Section 3.3): ONE orchestrator
 drives every workflow type. This file contains zero references to
-"Hardware", "Tender", or "Incident" â€” those categories are added in later
+"Hardware", "Tender", or "Incident" — those categories are added in later
 tickets purely as new rows in the workflow_store, never as new orchestrator
-code. If you find yourself wanting to add an `if workflow_def_id ==
-"HARDWARE_REQUEST"` branch anywhere below, that is a sign the pattern is
-being violated and the fix belongs in workflow_store.py's transition data,
-not here.
+code.
 """
 import json
 import logging
@@ -19,79 +20,132 @@ import azure.functions as func
 import azure.durable_functions as df
 
 from workflow_store import get_store, WorkflowStoreError
+from workflow_api import (
+    parse_start_request,
+    validate_workflow_def_id,
+    build_start_success_response,
+    build_error_response,
+    StartRequestValidationError,
+)
 
 app = df.DFApp(http_auth_level=func.AuthLevel.FUNCTION)
 
 
 # ---------------------------------------------------------------------------
-# HTTP Starter (smoke-test scope for HD-015/016 only)
+# HD-017: POST /api/workflow/start (generic, any workflowDefId)
 # ---------------------------------------------------------------------------
-# NOTE: this is a minimal starter sufficient to prove the orchestrator
-# pattern for this ticket. The full-featured, role-validated
-# POST /api/workflow/start (HD-017) and POST /api/workflow/action (HD-018)
-# supersede this in the next tickets â€” they add caller-role validation,
-# the 400-on-invalid-workflowDefId behaviour, and human-approval waiting
-# via external events. This starter deliberately does none of that; it
-# only proves that starting an orchestration against a workflow_def_id
-# correctly walks the seeded TEST definition end to end.
-@app.route(route="workflow/smoketest/start", methods=["POST"])
+@app.route(route="workflow/start", methods=["POST"])
 @app.durable_client_input(client_name="client")
-async def smoketest_start(req: func.HttpRequest, client) -> func.HttpResponse:
+async def workflow_start(req: func.HttpRequest, client) -> func.HttpResponse:
+    """
+    Request body: { "workflowDefId": "TEST", "requesterUpn": "user@... " (optional) }
+
+    Acceptance criteria (HD-017):
+    - Calling with a valid workflowDefId creates a workflow_instance in the
+      correct starting state.
+    - An invalid workflowDefId returns 400.
+
+    Design note: workflowDefId is validated SYNCHRONOUSLY against the store
+    before any Durable Functions orchestration starts (see workflow_api.py's
+    module docstring for why). This means a 400 response never involves an
+    orchestration at all — nothing is left half-started on bad input.
+    """
     try:
-        body = req.get_json()
-    except ValueError:
-        body = {}
+        parsed = parse_start_request(req.get_body())
+    except StartRequestValidationError as e:
+        return func.HttpResponse(
+            json.dumps(build_error_response(str(e))),
+            mimetype="application/json",
+            status_code=400,
+        )
 
-    workflow_def_id = body.get("workflowDefId", "TEST")
+    workflow_def_id = parsed["workflowDefId"]
+    store = get_store()
 
-    instance_id = await client.start_new(
+    try:
+        validate_workflow_def_id(store, workflow_def_id)
+    except WorkflowStoreError as e:
+        return func.HttpResponse(
+            json.dumps(build_error_response(str(e))),
+            mimetype="application/json",
+            status_code=400,
+        )
+
+    # Validation passed — now, and only now, create the instance and start
+    # the orchestration. create_instance() itself also re-validates against
+    # the store (see workflow_store.py), which is intentionally redundant
+    # with the check above: defence in depth against a definition being
+    # deleted in the split second between the two calls, however unlikely.
+    try:
+        instance = store.create_instance(workflow_def_id)
+    except WorkflowStoreError as e:
+        # Extremely unlikely given the check above, but never silently
+        # swallow a store error — surface it as a 400 for consistency.
+        return func.HttpResponse(
+            json.dumps(build_error_response(str(e))),
+            mimetype="application/json",
+            status_code=400,
+        )
+
+    orchestration_instance_id = await client.start_new(
         "generic_workflow_orchestrator",
-        client_input={"workflowDefId": workflow_def_id},
+        instance_id=instance.instance_id,
+        client_input={"workflowDefId": workflow_def_id, "existingInstanceId": instance.instance_id},
     )
-    logging.info(f"Started orchestration '{instance_id}' for workflowDefId={workflow_def_id}")
+    logging.info(
+        f"HD-017: started orchestration '{orchestration_instance_id}' for "
+        f"workflowDefId={workflow_def_id}, workflow_instance={instance.instance_id}"
+    )
 
-    return client.create_check_status_response(req, instance_id)
+    response_body = build_start_success_response(
+        instance_id=instance.instance_id,
+        workflow_def_id=workflow_def_id,
+        initial_state=instance.current_state,
+    )
+    return func.HttpResponse(
+        json.dumps(response_body),
+        mimetype="application/json",
+        status_code=201,
+    )
 
 
 # ---------------------------------------------------------------------------
-# Generic Orchestrator (HD-015 â€” the actual deliverable of this ticket)
+# Generic Orchestrator (HD-015)
 # ---------------------------------------------------------------------------
 @app.orchestration_trigger(context_name="context")
 def generic_workflow_orchestrator(context: df.DurableOrchestrationContext):
     """
-    Reads a workflow_definition by ID and walks its states end to end.
+    Walks a workflow_definition's states end to end, using only data read
+    via activity functions — never category-specific logic.
 
-    For HD-015/016, "walking the states" means auto-advancing through every
-    transition defined for the definition (since there is no human approval
-    step yet â€” that arrives with HD-018's action-waiting logic). This is
-    sufficient to satisfy this ticket's acceptance criterion: "transitions
-    through at least two dummy states without hardcoding any
-    category-specific logic."
-
-    Every piece of information this function needs (which states exist,
-    which transitions are legal, which action to fire) comes from the
-    workflow_definition read via an activity function â€” never from an
-    if/elif chain keyed on workflow_def_id.
+    HD-017 update: the orchestrator now accepts an OPTIONAL
+    'existingInstanceId' in its input. When present (as HD-017's
+    workflow_start endpoint always supplies), the orchestrator operates on
+    the workflow_instance already created by the HTTP trigger, rather than
+    creating a second, duplicate one itself. This avoids the HD-015-era
+    behaviour of the orchestrator creating its own instance internally,
+    which would have produced two competing workflow_instance rows for a
+    single logical request once a real HTTP caller was involved.
     """
     input_data = context.get_input()
     workflow_def_id = input_data["workflowDefId"]
+    existing_instance_id = input_data.get("existingInstanceId")
 
-    # Step 1: create the instance (activity function â€” deterministic replay safe)
-    instance_id = yield context.call_activity("create_workflow_instance", workflow_def_id)
+    if existing_instance_id:
+        instance_id = existing_instance_id
+    else:
+        # Preserved for backward compatibility with any direct internal
+        # callers that don't pre-create an instance (none remain in this
+        # codebase after HD-017, but this keeps the orchestrator
+        # independently usable/testable without the HTTP layer).
+        instance_id = yield context.call_activity("create_workflow_instance", workflow_def_id)
 
     transitions_taken = []
 
-    # Step 2: repeatedly ask "what does the definition say happens next?"
-    # and apply it, until the definition itself says we've reached a
-    # terminal state. No workflow-specific logic appears here at all.
     while True:
         step_result = yield context.call_activity("advance_workflow_instance", instance_id)
 
         if step_result["error"]:
-            # Defined transition ran out â€” nothing more to auto-advance.
-            # (Real workflows with human approval will instead pause here
-            # and await_external_event in HD-018; this ticket's TEST
-            # definition has no approval steps, so this simply means done.)
             break
 
         transitions_taken.append(step_result["transition"])
@@ -108,15 +162,13 @@ def generic_workflow_orchestrator(context: df.DurableOrchestrationContext):
 
 
 # ---------------------------------------------------------------------------
-# Activity Functions â€” the only place that touches the WorkflowStore
+# Activity Functions — the only place that touches the WorkflowStore
 # ---------------------------------------------------------------------------
 @app.activity_trigger(input_name="workflowDefId")
 def create_workflow_instance(workflowDefId: str) -> str:
     """Creates a new workflow_instance for the given definition and
-    returns its instance_id. Raises (surfacing as an orchestrator failure)
-    if the workflowDefId does not exist â€” this is intentional: an
-    orchestration should never silently proceed against an unknown
-    definition."""
+    returns its instance_id. Retained for orchestrations that don't
+    pre-create an instance via the HTTP layer (see docstring above)."""
     store = get_store()
     instance = store.create_instance(workflowDefId)
     logging.info(f"Created workflow_instance {instance.instance_id} "
@@ -127,9 +179,7 @@ def create_workflow_instance(workflowDefId: str) -> str:
 @app.activity_trigger(input_name="instanceId")
 def advance_workflow_instance(instanceId: str) -> dict:
     """Applies the next available transition for this instance's current
-    state, per its workflow_definition. Returns a small result dict rather
-    than raising, so the orchestrator can decide whether to keep looping
-    without treating 'no more transitions' as an error condition."""
+    state, per its workflow_definition."""
     store = get_store()
     try:
         instance = store.get_instance(instanceId)
@@ -140,11 +190,6 @@ def advance_workflow_instance(instanceId: str) -> dict:
     if definition.is_terminal(instance.current_state):
         return {"error": None, "transition": None, "is_terminal": True}
 
-    # For this generic skeleton, "advance" is the only action fired
-    # automatically. Category-specific workflows (Hardware, Tender,
-    # Incident) will instead be driven by explicit actions submitted via
-    # POST /api/workflow/action (HD-018), validated against the caller's
-    # role â€” that logic lives in that ticket, not here.
     next_state = definition.next_state(instance.current_state, action="advance")
 
     if next_state is None:
@@ -164,12 +209,12 @@ def advance_workflow_instance(instanceId: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Health check (reused pattern from the DevOps agent Function App)
+# Health check
 # ---------------------------------------------------------------------------
 @app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def health(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(
-        json.dumps({"status": "ok", "service": "it-helpdesk-api", "ticket": "HD-015/HD-016"}),
+        json.dumps({"status": "ok", "service": "it-helpdesk-api", "ticket": "HD-017"}),
         mimetype="application/json",
         status_code=200,
     )
