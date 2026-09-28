@@ -10,37 +10,42 @@ HD-018:
     contract used by the auto-advance orchestrator loop.
   - _compute_terminal_states() moved here from sql_workflow_store.py so
     BOTH the in-memory seed and the SQL row-parser compute terminal states
-    the exact same way — previously this logic only existed on the SQL
-    side, and in-memory definitions had terminal_states hardcoded
-    separately, which could silently drift out of sync as definitions grew
-    more complex (like this ticket's new TEST_APPROVAL).
+    the exact same way.
   - ApprovalChainEntry + WorkflowStore.append_approval_entry() /
-    get_approval_chain() — this is HD-008's approval_chain table,
-    bundled into this ticket. Reason: HD-018's own acceptance criterion
-    ("...appends to approval_chain where relevant") cannot be satisfied
-    without it existing — building HD-018 without HD-008 would produce
-    code that claims to do something it structurally cannot do.
-  - InMemoryWorkflowStore now also seeds a second definition, TEST_APPROVAL,
-    alongside the original TEST. TEST's transitions are all role-free
-    (unchanged, zero regression risk); TEST_APPROVAL adds one role-gated
-    'approve'/'reject' pair specifically so HD-018's role-check logic has
-    something real to exercise, both in tests and in a live smoke test.
-HD-007 (this revision):
-  - SlaClock dataclass + compute_sla_breached() — a pure, offline-testable
-    function. An SLA is breached once the current UTC time has passed
-    target_resolution_at. A None target (matches HD-032's Procurement
-    state, which the spec explicitly says has 'no fixed SLA target') is
-    never breached. breached_flag is deliberately a LIVE computed property,
-    not a stored bit a timer job must flip — this is what makes HD-007's
-    acceptance criterion ("querying breachedFlag returns the expected
-    boolean after the target time passes in a test") true without needing
-    a background job to run between the insert and the query in a
-    fast-running test.
-  - WorkflowStore.create_sla_clock() / get_sla_clock() — same "abstract
-    interface + InMemoryWorkflowStore implementation" pattern already
-    established for approval_chain in HD-018. SqlWorkflowStore's matching
-    implementation lives in sql_workflow_store.py, backed by the new
-    dbo.sla_clock table (see sql/schema_update_hd007.sql).
+    get_approval_chain() — HD-008's approval_chain table.
+  - InMemoryWorkflowStore now also seeds TEST_APPROVAL alongside TEST.
+HD-007: SlaClock dataclass + compute_sla_breached() (pure, offline-testable)
+  + WorkflowStore.create_sla_clock() / get_sla_clock().
+HD-028/029 (this revision):
+  - WorkflowInstance gains requester_upn (Optional[str], defaults to None
+    so every existing caller of create_instance()/WorkflowInstance(...)
+    keeps working unchanged — this is an additive, backward-compatible
+    field, not a breaking signature change).
+  - WorkflowDefinition.roles_pending_from(state) — a small, pure helper:
+    returns the sorted set of distinct 'requiredRole' values found on any
+    transition whose 'from' is the given state. Used by
+    get_instances_pending_role() below to answer "which instances are
+    currently sitting in a state where THIS role could act on them?"
+    without needing a separately-maintained 'pending approval' table.
+    Design note (please read before assuming this should instead read
+    approval_chain rows with status='Pending'): the MVP Build Backlog's
+    literal wording for HD-029 ("...instances where an approval_chain row
+    references them with status Pending") describes ServiceNow-style
+    ticket ASSIGNMENT, which this MVP does not implement — approval_chain
+    rows here are only ever written AFTER a decision is actioned (see
+    workflow_action_api.py's determine_approval_status(), which maps
+    action -> 'Approved'/'Rejected', never 'Pending'). Introducing
+    'Pending' rows would require deciding who to name-assign a Pending row
+    to at instance-creation time, which this MVP's role-based (not
+    named-individual) approval model does not support. This revision
+    therefore implements "awaiting my decision" as a DERIVED query — is
+    this instance non-terminal, and does its current_state have an
+    outgoing transition requiring my role — which is behaviourally
+    equivalent (a manager sees exactly the instances they could act on
+    right now) without requiring a schema change to add named assignment.
+  - WorkflowStore.get_instances_by_requester() / get_instances_pending_role()
+    — same "abstract interface + InMemoryWorkflowStore implementation"
+    pattern already established for approval_chain/sla_clock.
 """
 from __future__ import annotations
 import os
@@ -48,7 +53,7 @@ import uuid
 import datetime
 import logging
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Set
 
 
 def compute_terminal_states(states: List[str], transitions: List[Dict[str, str]]) -> List[str]:
@@ -71,10 +76,9 @@ class WorkflowDefinition:
         """Returns the FULL transition dict (including 'requiredRole' if
         present) for a given (current_state, action) pair, or None if
         undefined. This is the only place transition lookup logic lives —
-        both next_state() (used by the auto-advance orchestrator loop) and
-        HD-018's role-checking logic (workflow_action_api.py) go through
-        this single method, so there is exactly one source of truth for
-        'what happens on this action from this state'."""
+        both next_state() and HD-018's role-checking logic go through this
+        single method, so there is exactly one source of truth for 'what
+        happens on this action from this state'."""
         for t in self.transitions:
             if t["from"] == current_state and t["action"] == action:
                 return t
@@ -82,8 +86,7 @@ class WorkflowDefinition:
 
     def next_state(self, current_state: str, action: str) -> Optional[str]:
         """Unchanged contract from HD-015: returns just the resulting
-        state, or None. Reimplemented on top of get_transition() so there
-        is no duplicate lookup logic to keep in sync."""
+        state, or None."""
         transition = self.get_transition(current_state, action)
         return transition["to"] if transition else None
 
@@ -92,6 +95,22 @@ class WorkflowDefinition:
 
     def initial_state(self) -> str:
         return self.states[0]
+
+    def roles_pending_from(self, current_state: str) -> List[str]:
+        """HD-029: returns the sorted, deduplicated list of 'requiredRole'
+        values on any transition whose 'from' equals current_state.
+        Transitions with no requiredRole (role-free, e.g. TEST's 'advance'
+        transitions, or HARDWARE_REQUEST's 'submit') never contribute a
+        role here — a role-free next step is not something any specific
+        role is 'awaiting', it just auto-advances. Returns an empty list
+        for a terminal state or a state with no role-gated outgoing
+        transitions, e.g. a state where you'd expect nobody's myApprovals
+        list to include this instance."""
+        roles: Set[str] = set()
+        for t in self.transitions:
+            if t["from"] == current_state and t.get("requiredRole"):
+                roles.add(t["requiredRole"])
+        return sorted(roles)
 
 
 @dataclass
@@ -102,6 +121,7 @@ class WorkflowInstance:
     history: List[Dict[str, Any]] = field(default_factory=list)
     created_at: str = field(default_factory=lambda: datetime.datetime.utcnow().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.datetime.utcnow().isoformat())
+    requester_upn: Optional[str] = None  # HD-028: who started this instance, for myRequests
 
     def record_transition(self, from_state: str, to_state: str, action: str) -> None:
         self.history.append({
@@ -118,8 +138,7 @@ class WorkflowInstance:
 class ApprovalChainEntry:
     """HD-008/HD-018: one row per approval decision taken against a
     workflow_instance. step_order lets a single instance accumulate
-    multiple approval steps over time (e.g. Manager approval, then IT
-    approval, in a future multi-tier workflow), ordered and auditable."""
+    multiple approval steps over time, ordered and auditable."""
     instance_id: str
     step_order: int
     approver_upn: Optional[str]
@@ -128,22 +147,10 @@ class ApprovalChainEntry:
 
 
 def compute_sla_breached(target_resolution_at) -> bool:
-    """HD-007: pure, offline-testable function (see test_sla_clock.py).
-    An SLA is breached once the current UTC time has passed
-    target_resolution_at. A None target (matches HD-032's Procurement
-    state, which the spec explicitly says has 'no fixed SLA target') is
-    never breached.
-
-    Deliberately a LIVE computation rather than a stored bit that a timer
-    job must flip — this is what makes HD-007's acceptance criterion
-    ("querying breachedFlag returns the expected boolean after the
-    target time passes in a test") true without needing a background
-    job to run between the insert and the query in a fast-running test.
-
-    Accepts either a datetime object or an ISO-format string (the latter
-    is what SqlWorkflowStore's row parsing and InMemoryWorkflowStore's
-    plain-string storage both produce), so callers never need to know
-    which backend they're talking to."""
+    """HD-007: pure, offline-testable function. An SLA is breached once
+    the current UTC time has passed target_resolution_at. A None target
+    is never breached. Deliberately a LIVE computation, not a stored bit
+    a timer job must flip."""
     if not target_resolution_at:
         return False
     target = target_resolution_at
@@ -158,7 +165,7 @@ def compute_sla_breached(target_resolution_at) -> bool:
 class SlaClock:
     """HD-007: one row per workflow_instance, tracking its SLA response/
     resolution targets. breached_flag is a computed property, not a stored
-    field — see compute_sla_breached() for why."""
+    field."""
     instance_id: str
     target_response_at: Optional[str]
     target_resolution_at: Optional[str]
@@ -173,13 +180,13 @@ class WorkflowStoreError(Exception):
 
 
 class WorkflowStore:
-    """Abstract interface. SqlWorkflowStore (backed by Azure SQL) implements
-    this exact same interface — the orchestrator and API endpoints depend
-    only on this contract, never on a specific storage technology."""
+    """Abstract interface. SqlWorkflowStore implements this exact same
+    interface — the orchestrator and API endpoints depend only on this
+    contract, never on a specific storage technology."""
     def get_definition(self, workflow_def_id: str) -> WorkflowDefinition:
         raise NotImplementedError
 
-    def create_instance(self, workflow_def_id: str) -> WorkflowInstance:
+    def create_instance(self, workflow_def_id: str, requester_upn: Optional[str] = None) -> WorkflowInstance:
         raise NotImplementedError
 
     def get_instance(self, instance_id: str) -> WorkflowInstance:
@@ -199,22 +206,27 @@ class WorkflowStore:
     def create_sla_clock(
         self, instance_id: str, target_response_at: Optional[str], target_resolution_at: Optional[str]
     ) -> "SlaClock":
-        """HD-007. Implementations should insert (or upsert) a single
-        sla_clock row for this instance_id and return it."""
         raise NotImplementedError
 
     def get_sla_clock(self, instance_id: str) -> Optional["SlaClock"]:
-        """HD-007. Returns None if no sla_clock row exists for this
-        instance_id yet (e.g. states like Procurement that have no fixed
-        SLA target per the MVP spec)."""
+        raise NotImplementedError
+
+    def get_instances_by_requester(self, requester_upn: str) -> List[WorkflowInstance]:
+        """HD-028. Returns all instances started by this requester_upn,
+        most-recently-created first."""
+        raise NotImplementedError
+
+    def get_instances_pending_role(self, role: str) -> List[WorkflowInstance]:
+        """HD-029. Returns all non-terminal instances whose current_state
+        has at least one outgoing transition requiring this role. See this
+        module's docstring for why this is a derived query rather than a
+        stored 'Pending' approval_chain row."""
         raise NotImplementedError
 
 
 class InMemoryWorkflowStore(WorkflowStore):
     """Original HD-015/HD-016 implementation. Data does not persist across
-    Function App restarts. Retained as the safe fallback when Azure SQL is
-    not yet configured (AZURE_SQL_SERVER app setting absent) — see get_store()
-    below."""
+    Function App restarts. Safe fallback when Azure SQL is not configured."""
     def __init__(self):
         self._definitions: Dict[str, WorkflowDefinition] = {}
         self._instances: Dict[str, WorkflowInstance] = {}
@@ -224,8 +236,6 @@ class InMemoryWorkflowStore(WorkflowStore):
         self._seed_test_approval_definition()
 
     def _seed_test_definition(self) -> None:
-        """HD-016: unchanged. Start -> Middle -> End, all role-free, all
-        action='advance'. Zero regression risk from HD-018's changes."""
         states = ["Start", "Middle", "End"]
         transitions = [
             {"from": "Start", "to": "Middle", "action": "advance"},
@@ -239,23 +249,6 @@ class InMemoryWorkflowStore(WorkflowStore):
         )
 
     def _seed_test_approval_definition(self) -> None:
-        """HD-018: a second, minimal seed definition with exactly one
-        role-gated decision point, so role-checking and approval_chain
-        logic have something real to exercise end to end — both in the
-        offline test suite and in a live smoke test — without touching or
-        risking the original TEST definition's proven behaviour.
-        Start -> PendingApproval (action=submit, no role required, any
-        Requester can do this)
-        PendingApproval -> Approved (action=approve, requiredRole=Approver)
-        PendingApproval -> Rejected (action=reject, requiredRole=Approver)
-        Note: this definition has NO 'advance'-action transitions, so the
-        existing auto-advance orchestrator loop (which only ever tries
-        action='advance') will find nothing to auto-advance and complete
-        immediately after instance creation, leaving the instance sitting
-        in 'Start' until a human calls POST /api/workflow/action. This is
-        intentional — see function_app.py's module docstring for the full
-        explanation of why HD-018 does not extend true Durable Functions
-        external-event-waiting in this ticket."""
         states = ["Start", "PendingApproval", "Approved", "Rejected"]
         transitions = [
             {"from": "Start", "to": "PendingApproval", "action": "submit"},
@@ -274,12 +267,13 @@ class InMemoryWorkflowStore(WorkflowStore):
             raise WorkflowStoreError(f"Unknown workflow_def_id: {workflow_def_id}")
         return self._definitions[workflow_def_id]
 
-    def create_instance(self, workflow_def_id: str) -> WorkflowInstance:
+    def create_instance(self, workflow_def_id: str, requester_upn: Optional[str] = None) -> WorkflowInstance:
         definition = self.get_definition(workflow_def_id)
         instance = WorkflowInstance(
             instance_id=str(uuid.uuid4()),
             workflow_def_id=workflow_def_id,
             current_state=definition.initial_state(),
+            requester_upn=requester_upn,
         )
         self._instances[instance.instance_id] = instance
         return instance
@@ -311,11 +305,6 @@ class InMemoryWorkflowStore(WorkflowStore):
     def create_sla_clock(
         self, instance_id: str, target_response_at: Optional[str], target_resolution_at: Optional[str]
     ) -> SlaClock:
-        """HD-007. Same upsert-by-instance_id shape as a SQL PK on
-        instanceId would enforce — calling this twice for the same
-        instance_id replaces the previous clock rather than erroring or
-        duplicating, matching SqlWorkflowStore's single-row-per-instance
-        table design."""
         clock = SlaClock(
             instance_id=instance_id,
             target_response_at=target_response_at,
@@ -327,11 +316,27 @@ class InMemoryWorkflowStore(WorkflowStore):
     def get_sla_clock(self, instance_id: str) -> Optional[SlaClock]:
         return self._sla_clocks.get(instance_id)
 
+    def get_instances_by_requester(self, requester_upn: str) -> List[WorkflowInstance]:
+        matches = [i for i in self._instances.values() if i.requester_upn == requester_upn]
+        return sorted(matches, key=lambda i: i.created_at, reverse=True)
+
+    def get_instances_pending_role(self, role: str) -> List[WorkflowInstance]:
+        matches = []
+        for instance in self._instances.values():
+            definition = self._definitions.get(instance.workflow_def_id)
+            if definition is None:
+                continue
+            if definition.is_terminal(instance.current_state):
+                continue
+            if role in definition.roles_pending_from(instance.current_state):
+                matches.append(instance)
+        return sorted(matches, key=lambda i: i.created_at, reverse=True)
+
 
 # Module-level singleton. NOTE: for InMemoryWorkflowStore, this is not
 # reliable across concurrent Flex Consumption worker instances — this is why
 # HD-002/003/005/006/008 exist. Once AZURE_SQL_SERVER is set, get_store()
-# returns a SqlWorkflowStore instead, and this limitation no longer applies.
+# returns a SqlWorkflowStore instead.
 _store_instance: Optional[WorkflowStore] = None
 
 
@@ -348,9 +353,7 @@ def get_store() -> WorkflowStore:
         except Exception:
             logging.exception(
                 "get_store: AZURE_SQL_SERVER is set but SqlWorkflowStore failed to "
-                "initialise. Falling back to InMemoryWorkflowStore. This means "
-                "workflow data will NOT persist across restarts until the "
-                "underlying SQL issue is fixed."
+                "initialise. Falling back to InMemoryWorkflowStore."
             )
     _store_instance = InMemoryWorkflowStore()
     return _store_instance
