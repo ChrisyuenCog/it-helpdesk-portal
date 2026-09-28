@@ -7,6 +7,16 @@ Connection-dependent methods (get_definition, create_instance, get_instance,
 save_instance on SqlWorkflowStore itself) are NOT covered here — they must be
 validated manually against the real Azure SQL Database once provisioned, per
 runbook.md Section 6.
+
+HD-028 update: row_to_instance() now parses a 7-element row (added
+requesterUpn as the 7th column — see sql_workflow_store.py's module
+docstring for why it is appended rather than inserted in the middle).
+Tests 3 and 4 below were updated to pass 7-element tuples accordingly, and
+a new Test 3b covers the requesterUpn value round-tripping correctly.
+build_insert_instance_params() now also takes a third requester_upn
+argument — Test 5 updated to match; a new Test 5b covers the
+requester_upn=None case (an instance started with no attributed
+requester, e.g. the orchestrator's own auto-created TEST instances).
 """
 import json
 from sql_workflow_store import (
@@ -50,7 +60,7 @@ terminal = compute_terminal_states(states, transitions)
 assert set(terminal) == {"C", "D"}, f"Expected C and D terminal, got {terminal}"
 print(f"PASS — correctly identifies multiple terminal states: {sorted(terminal)}\n")
 
-print("=== Test 3: row_to_instance parses a workflow_instance row correctly ===")
+print("=== Test 3: row_to_instance parses a workflow_instance row correctly (HD-028: 7 columns) ===")
 history = [{"from": "Start", "to": "Middle", "action": "advance", "at": "2026-09-25T15:00:00"}]
 row = (
     "abc-123-guid",
@@ -59,24 +69,45 @@ row = (
     json.dumps(history),
     "2026-09-25 15:00:00",
     "2026-09-25 15:00:01",
+    "chris.yuen@cognitionlearninggroup.com",  # HD-028: requesterUpn, 7th column
 )
 instance = row_to_instance(row)
 assert instance.instance_id == "abc-123-guid"
 assert instance.workflow_def_id == "TEST"
 assert instance.current_state == "Middle"
 assert instance.history == history
-print(f"PASS — instance correctly parsed, history round-trips through JSON\n")
+assert instance.requester_upn == "chris.yuen@cognitionlearninggroup.com"
+print(f"PASS — instance correctly parsed, history round-trips through JSON, requesterUpn populated\n")
+
+print("=== Test 3b: row_to_instance handles a NULL requesterUpn correctly (HD-028) ===")
+row_no_requester = (
+    "abc-456-guid",
+    "TEST",
+    "Middle",
+    json.dumps(history),
+    "2026-09-25 15:00:00",
+    "2026-09-25 15:00:01",
+    None,  # requesterUpn — e.g. an orchestrator-created instance with no attributed requester
+)
+instance_no_requester = row_to_instance(row_no_requester)
+assert instance_no_requester.requester_upn is None
+print("PASS — NULL requesterUpn correctly becomes None, not an error\n")
 
 print("=== Test 4: row_to_instance handles NULL historyJson (new instance, no transitions yet) ===")
-row = ("new-guid", "TEST", "Start", None, "2026-09-25 15:00:00", "2026-09-25 15:00:00")
+row = ("new-guid", "TEST", "Start", None, "2026-09-25 15:00:00", "2026-09-25 15:00:00", None)
 instance = row_to_instance(row)
 assert instance.history == [], f"Expected empty history for NULL historyJson, got {instance.history}"
 print("PASS — NULL historyJson correctly becomes an empty list, not an error\n")
 
-print("=== Test 5: build_insert_instance_params produces the right parameter order ===")
-params = build_insert_instance_params("TEST", "Start")
-assert params == ("TEST", "Start")
+print("=== Test 5: build_insert_instance_params produces the right parameter order (HD-028: 3 params) ===")
+params = build_insert_instance_params("TEST", "Start", "chris.yuen@cognitionlearninggroup.com")
+assert params == ("TEST", "Start", "chris.yuen@cognitionlearninggroup.com")
 print(f"PASS — insert params: {params}\n")
+
+print("=== Test 5b: build_insert_instance_params handles requester_upn=None correctly (HD-028) ===")
+params_none = build_insert_instance_params("TEST", "Start", None)
+assert params_none == ("TEST", "Start", None)
+print(f"PASS — insert params with no requester: {params_none}\n")
 
 print("=== Test 6: build_update_instance_params serializes history correctly ===")
 inst = WorkflowInstance(instance_id="xyz", workflow_def_id="TEST", current_state="Start")
