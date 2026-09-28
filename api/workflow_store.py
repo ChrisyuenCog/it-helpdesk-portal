@@ -3,7 +3,7 @@ IT Helpdesk Portal — Workflow Store
 =====================================
 HD-015/016: generic state machine + TEST definition.
 HD-002/003/005/006: durable Azure SQL-backed storage, with safe in-memory fallback.
-HD-018 (this revision):
+HD-018:
   - WorkflowDefinition.get_transition() — full transition lookup (including
     an optional 'requiredRole'), so role-gated actions can be checked
     against a definition without changing the existing next_state()
@@ -25,6 +25,22 @@ HD-018 (this revision):
     (unchanged, zero regression risk); TEST_APPROVAL adds one role-gated
     'approve'/'reject' pair specifically so HD-018's role-check logic has
     something real to exercise, both in tests and in a live smoke test.
+HD-007 (this revision):
+  - SlaClock dataclass + compute_sla_breached() — a pure, offline-testable
+    function. An SLA is breached once the current UTC time has passed
+    target_resolution_at. A None target (matches HD-032's Procurement
+    state, which the spec explicitly says has 'no fixed SLA target') is
+    never breached. breached_flag is deliberately a LIVE computed property,
+    not a stored bit a timer job must flip — this is what makes HD-007's
+    acceptance criterion ("querying breachedFlag returns the expected
+    boolean after the target time passes in a test") true without needing
+    a background job to run between the insert and the query in a
+    fast-running test.
+  - WorkflowStore.create_sla_clock() / get_sla_clock() — same "abstract
+    interface + InMemoryWorkflowStore implementation" pattern already
+    established for approval_chain in HD-018. SqlWorkflowStore's matching
+    implementation lives in sql_workflow_store.py, backed by the new
+    dbo.sla_clock table (see sql/schema_update_hd007.sql).
 """
 from __future__ import annotations
 import os
@@ -111,6 +127,47 @@ class ApprovalChainEntry:
     actioned_at: str = field(default_factory=lambda: datetime.datetime.utcnow().isoformat())
 
 
+def compute_sla_breached(target_resolution_at) -> bool:
+    """HD-007: pure, offline-testable function (see test_sla_clock.py).
+    An SLA is breached once the current UTC time has passed
+    target_resolution_at. A None target (matches HD-032's Procurement
+    state, which the spec explicitly says has 'no fixed SLA target') is
+    never breached.
+
+    Deliberately a LIVE computation rather than a stored bit that a timer
+    job must flip — this is what makes HD-007's acceptance criterion
+    ("querying breachedFlag returns the expected boolean after the
+    target time passes in a test") true without needing a background
+    job to run between the insert and the query in a fast-running test.
+
+    Accepts either a datetime object or an ISO-format string (the latter
+    is what SqlWorkflowStore's row parsing and InMemoryWorkflowStore's
+    plain-string storage both produce), so callers never need to know
+    which backend they're talking to."""
+    if not target_resolution_at:
+        return False
+    target = target_resolution_at
+    if isinstance(target, str):
+        target = datetime.datetime.fromisoformat(target.replace("Z", "+00:00"))
+    if target.tzinfo is None:
+        target = target.replace(tzinfo=datetime.timezone.utc)
+    return datetime.datetime.now(datetime.timezone.utc) > target
+
+
+@dataclass
+class SlaClock:
+    """HD-007: one row per workflow_instance, tracking its SLA response/
+    resolution targets. breached_flag is a computed property, not a stored
+    field — see compute_sla_breached() for why."""
+    instance_id: str
+    target_response_at: Optional[str]
+    target_resolution_at: Optional[str]
+
+    @property
+    def breached_flag(self) -> bool:
+        return compute_sla_breached(self.target_resolution_at)
+
+
 class WorkflowStoreError(Exception):
     pass
 
@@ -119,7 +176,6 @@ class WorkflowStore:
     """Abstract interface. SqlWorkflowStore (backed by Azure SQL) implements
     this exact same interface — the orchestrator and API endpoints depend
     only on this contract, never on a specific storage technology."""
-
     def get_definition(self, workflow_def_id: str) -> WorkflowDefinition:
         raise NotImplementedError
 
@@ -140,17 +196,30 @@ class WorkflowStore:
     def get_approval_chain(self, instance_id: str) -> List[ApprovalChainEntry]:
         raise NotImplementedError
 
+    def create_sla_clock(
+        self, instance_id: str, target_response_at: Optional[str], target_resolution_at: Optional[str]
+    ) -> "SlaClock":
+        """HD-007. Implementations should insert (or upsert) a single
+        sla_clock row for this instance_id and return it."""
+        raise NotImplementedError
+
+    def get_sla_clock(self, instance_id: str) -> Optional["SlaClock"]:
+        """HD-007. Returns None if no sla_clock row exists for this
+        instance_id yet (e.g. states like Procurement that have no fixed
+        SLA target per the MVP spec)."""
+        raise NotImplementedError
+
 
 class InMemoryWorkflowStore(WorkflowStore):
     """Original HD-015/HD-016 implementation. Data does not persist across
     Function App restarts. Retained as the safe fallback when Azure SQL is
     not yet configured (AZURE_SQL_SERVER app setting absent) — see get_store()
     below."""
-
     def __init__(self):
         self._definitions: Dict[str, WorkflowDefinition] = {}
         self._instances: Dict[str, WorkflowInstance] = {}
         self._approval_chains: Dict[str, List[ApprovalChainEntry]] = {}
+        self._sla_clocks: Dict[str, SlaClock] = {}
         self._seed_test_definition()
         self._seed_test_approval_definition()
 
@@ -175,12 +244,10 @@ class InMemoryWorkflowStore(WorkflowStore):
         logic have something real to exercise end to end — both in the
         offline test suite and in a live smoke test — without touching or
         risking the original TEST definition's proven behaviour.
-
         Start -> PendingApproval (action=submit, no role required, any
         Requester can do this)
         PendingApproval -> Approved (action=approve, requiredRole=Approver)
         PendingApproval -> Rejected (action=reject, requiredRole=Approver)
-
         Note: this definition has NO 'advance'-action transitions, so the
         existing auto-advance orchestrator loop (which only ever tries
         action='advance') will find nothing to auto-advance and complete
@@ -241,6 +308,25 @@ class InMemoryWorkflowStore(WorkflowStore):
     def get_approval_chain(self, instance_id: str) -> List[ApprovalChainEntry]:
         return list(self._approval_chains.get(instance_id, []))
 
+    def create_sla_clock(
+        self, instance_id: str, target_response_at: Optional[str], target_resolution_at: Optional[str]
+    ) -> SlaClock:
+        """HD-007. Same upsert-by-instance_id shape as a SQL PK on
+        instanceId would enforce — calling this twice for the same
+        instance_id replaces the previous clock rather than erroring or
+        duplicating, matching SqlWorkflowStore's single-row-per-instance
+        table design."""
+        clock = SlaClock(
+            instance_id=instance_id,
+            target_response_at=target_response_at,
+            target_resolution_at=target_resolution_at,
+        )
+        self._sla_clocks[instance_id] = clock
+        return clock
+
+    def get_sla_clock(self, instance_id: str) -> Optional[SlaClock]:
+        return self._sla_clocks.get(instance_id)
+
 
 # Module-level singleton. NOTE: for InMemoryWorkflowStore, this is not
 # reliable across concurrent Flex Consumption worker instances — this is why
@@ -253,7 +339,6 @@ def get_store() -> WorkflowStore:
     global _store_instance
     if _store_instance is not None:
         return _store_instance
-
     if os.environ.get("AZURE_SQL_SERVER"):
         try:
             from sql_workflow_store import SqlWorkflowStore
@@ -267,6 +352,5 @@ def get_store() -> WorkflowStore:
                 "workflow data will NOT persist across restarts until the "
                 "underlying SQL issue is fixed."
             )
-
     _store_instance = InMemoryWorkflowStore()
     return _store_instance
