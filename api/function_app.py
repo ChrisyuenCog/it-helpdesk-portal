@@ -3,44 +3,34 @@ IT Helpdesk Portal — Function App Entry Point
 ================================================
 HD-015: Generic Durable Functions orchestrator skeleton.
 HD-016: TEST workflow_definition seeded.
-HD-002/003/005/006/008: durable Azure SQL-backed storage (ci_base,
-    workflow_definition, workflow_instance, approval_chain), with safe
-    in-memory fallback.
 HD-017: POST /api/workflow/start.
-HD-018 (this revision): POST /api/workflow/action — the endpoint that
-    lets a human decision (approve/reject/etc.) progress a workflow
-    instance, with role-gated 400/403 handling and approval_chain logging.
+HD-018: POST /api/workflow/action.
+HD-027: GET /api/workflow/instance/{instanceId}.
+HD-028/029 (this revision):
+  - workflow_start now captures the caller-supplied 'requesterUpn' from
+    the request body (already parsed by workflow_api.parse_start_request,
+    but previously discarded — never passed to store.create_instance())
+    and threads it through so instances are attributable to a requester.
+  - GET /api/workflow/myRequests — a Requester's own submitted requests
+    across every category, via ?requesterUpn=.
+  - GET /api/workflow/myApprovals — every instance currently awaiting a
+    given role's decision, across every category, via ?role=.
+  Both new routes are thin HTTP triggers delegating to workflow_list_api.py,
+  the same "logic lives in its own module" pattern as every prior ticket.
 
-*** Scope note carried from workflow_action_api.py — repeated here because
-it matters at the point where the route is wired up, not just buried in a
-helper module: 'callerRole' is accepted directly in the request body for
-MVP demonstration purposes. It is NOT yet backed by validated Entra ID
-token claims. Treat POST /api/workflow/action as functionally correct but
-NOT YET a real access-control boundary until Sprint 4's Security Hardening
-work (HD-066 and related) wires this to genuine identity. ***
+*** Scope note carried from workflow_action_api.py / workflow_list_api.py —
+repeated here because it matters at the point where routes are wired up:
+'callerRole' (HD-018) and 'requesterUpn'/'role' (HD-028/029) are all
+accepted directly from the caller (request body or query string) for MVP
+demonstration purposes. None are yet backed by validated Entra ID token
+claims. Treat these endpoints as functionally correct but NOT YET a real
+access-control boundary until Sprint 4's Security Hardening work (HD-066)
+wires them to genuine identity. ***
 
 Design principle (per MVP Specification, Section 3.3): ONE orchestrator
 drives every workflow type. This file contains zero references to
-"Hardware", "Tender", or "Incident" — those categories are added in later
-tickets purely as new rows in the workflow_store, never as new orchestrator
-code.
-
-HD-018 architectural note on why /api/workflow/action does NOT touch
-Durable Functions at all: the generic orchestrator's auto-advance loop only
-ever attempts action='advance' transitions (see
-generic_workflow_orchestrator below) — it has no concept of waiting for a
-human decision. For TEST_APPROVAL (this ticket's new role-gated seed
-definition), the orchestration therefore completes immediately after
-instance creation, having taken zero transitions, once it finds no
-'advance' action available from the initial state. The workflow_instance
-row in the store remains the single source of truth for state from that
-point forward, and POST /api/workflow/action operates directly against the
-store — independent of the (already-completed) orchestration's lifecycle.
-Building true event-driven waiting (Durable Functions'
-wait_for_external_event, the "Human Interaction" pattern referenced in the
-original architecture rethink) is deferred to a later maturity ticket; it
-is not required to satisfy HD-018's stated acceptance criteria, and adding
-it now would be scope creep against an MVP ticket.
+"Hardware", "Tender", or "Incident" — those categories are added purely as
+new rows in the workflow_store, never as new orchestrator code.
 """
 import json
 import logging
@@ -65,6 +55,19 @@ from workflow_action_api import (
     ActionNotAllowedError,
     RoleNotPermittedError,
 )
+from workflow_instance_api import (
+    parse_instance_id,
+    load_instance_view,
+    InstanceNotFoundError,
+)
+from workflow_list_api import (
+    parse_my_requests_query,
+    parse_my_approvals_query,
+    build_my_requests_response,
+    build_my_approvals_response,
+    MyRequestsValidationError,
+    MyApprovalsValidationError,
+)
 
 app = df.DFApp(http_auth_level=func.AuthLevel.FUNCTION)
 
@@ -85,6 +88,7 @@ async def workflow_start(req: func.HttpRequest, client) -> func.HttpResponse:
         )
 
     workflow_def_id = parsed["workflowDefId"]
+    requester_upn = parsed.get("requesterUpn")  # HD-028: now actually used, not discarded
     store = get_store()
 
     try:
@@ -97,7 +101,7 @@ async def workflow_start(req: func.HttpRequest, client) -> func.HttpResponse:
         )
 
     try:
-        instance = store.create_instance(workflow_def_id)
+        instance = store.create_instance(workflow_def_id, requester_upn=requester_upn)
     except WorkflowStoreError as e:
         return func.HttpResponse(
             json.dumps(build_error_response(str(e))),
@@ -110,9 +114,11 @@ async def workflow_start(req: func.HttpRequest, client) -> func.HttpResponse:
         instance_id=instance.instance_id,
         client_input={"workflowDefId": workflow_def_id, "existingInstanceId": instance.instance_id},
     )
+
     logging.info(
         f"HD-017: started orchestration '{orchestration_instance_id}' for "
-        f"workflowDefId={workflow_def_id}, workflow_instance={instance.instance_id}"
+        f"workflowDefId={workflow_def_id}, workflow_instance={instance.instance_id}, "
+        f"requesterUpn={requester_upn}"
     )
 
     response_body = build_start_success_response(
@@ -132,26 +138,6 @@ async def workflow_start(req: func.HttpRequest, client) -> func.HttpResponse:
 # ---------------------------------------------------------------------------
 @app.route(route="workflow/action", methods=["POST"])
 def workflow_action(req: func.HttpRequest) -> func.HttpResponse:
-    """
-    Request body: {
-        "instanceId": "...",
-        "action": "approve" | "reject" | "submit" | ...,
-        "callerRole": "Approver" (optional — see MVP scope note at top of file),
-        "callerUpn": "manager@..." (optional, recorded on the approval_chain entry)
-    }
-
-    HTTP status mapping:
-    - 400: malformed request body, OR the action is not valid from the
-      instance's current state (including an already-terminal instance)
-    - 403: the transition requires a role the caller did not supply /
-      match (HD-018's core acceptance criterion)
-    - 404: instanceId does not refer to a known workflow_instance
-    - 200: transition applied successfully
-
-    Note this is a plain HTTP-triggered function, NOT wired to the Durable
-    Functions client — see this file's module docstring for why this
-    ticket's design does not require touching orchestration state at all.
-    """
     try:
         parsed = parse_action_request(req.get_body())
     except ActionRequestValidationError as e:
@@ -175,9 +161,6 @@ def workflow_action(req: func.HttpRequest) -> func.HttpResponse:
     try:
         definition = store.get_definition(instance.workflow_def_id)
     except WorkflowStoreError as e:
-        # An instance referencing a now-missing definition is a data
-        # integrity problem, not a caller error — surface as 500 and log
-        # loudly rather than silently mapping it to a 4xx.
         logging.error(
             f"HD-018: instance {instance.instance_id} references unknown "
             f"workflowDefId '{instance.workflow_def_id}': {e}"
@@ -233,18 +216,120 @@ def workflow_action(req: func.HttpRequest) -> func.HttpResponse:
 
 
 # ---------------------------------------------------------------------------
+# HD-027: GET /api/workflow/instance/{instanceId}
+# ---------------------------------------------------------------------------
+@app.route(route="workflow/instance/{instanceId}", methods=["GET"])
+def workflow_get_instance(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        instance_id = parse_instance_id(req.route_params.get("instanceId"))
+    except InstanceNotFoundError as e:
+        return func.HttpResponse(
+            json.dumps(build_error_response(str(e))),
+            mimetype="application/json",
+            status_code=404,
+        )
+
+    store = get_store()
+
+    try:
+        view = load_instance_view(store, instance_id)
+    except InstanceNotFoundError as e:
+        return func.HttpResponse(
+            json.dumps(build_error_response(str(e))),
+            mimetype="application/json",
+            status_code=404,
+        )
+
+    return func.HttpResponse(
+        json.dumps(view),
+        mimetype="application/json",
+        status_code=200,
+    )
+
+
+# ---------------------------------------------------------------------------
+# HD-028: GET /api/workflow/myRequests?requesterUpn=
+# ---------------------------------------------------------------------------
+@app.route(route="workflow/myRequests", methods=["GET"])
+def workflow_my_requests(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Query string: ?requesterUpn=chris.yuen@cognitionlearninggroup.com
+
+    HTTP status mapping:
+    - 400: 'requesterUpn' query parameter missing or empty
+    - 200: returns { requesterUpn, count, instances: [...] }, possibly
+      an empty instances list if this requester has never started one
+
+    See this file's module docstring and workflow_list_api.py's for the
+    MVP identity scope note — requesterUpn is caller-supplied, not yet
+    validated against a real signed-in identity.
+    """
+    try:
+        requester_upn = parse_my_requests_query(dict(req.params))
+    except MyRequestsValidationError as e:
+        return func.HttpResponse(
+            json.dumps(build_error_response(str(e))),
+            mimetype="application/json",
+            status_code=400,
+        )
+
+    store = get_store()
+    instances = store.get_instances_by_requester(requester_upn)
+    response_body = build_my_requests_response(instances, requester_upn)
+
+    return func.HttpResponse(
+        json.dumps(response_body),
+        mimetype="application/json",
+        status_code=200,
+    )
+
+
+# ---------------------------------------------------------------------------
+# HD-029: GET /api/workflow/myApprovals?role=
+# ---------------------------------------------------------------------------
+@app.route(route="workflow/myApprovals", methods=["GET"])
+def workflow_my_approvals(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Query string: ?role=Approver (or ITAgent, ITAdmin, etc. — any value
+    that appears as a 'requiredRole' on some workflow_definition's
+    transitions)
+
+    HTTP status mapping:
+    - 400: 'role' query parameter missing or empty
+    - 200: returns { role, count, instances: [...] } — every non-terminal
+      instance whose current state has an outgoing transition requiring
+      this role, across every workflow category
+
+    See workflow_store.py's module docstring for why this is implemented
+    as a derived query rather than reading stored 'Pending' approval_chain
+    rows (this MVP's approval_chain rows are only ever written after a
+    decision is actioned, never before).
+    """
+    try:
+        role = parse_my_approvals_query(dict(req.params))
+    except MyApprovalsValidationError as e:
+        return func.HttpResponse(
+            json.dumps(build_error_response(str(e))),
+            mimetype="application/json",
+            status_code=400,
+        )
+
+    store = get_store()
+    instances = store.get_instances_pending_role(role)
+    response_body = build_my_approvals_response(instances, role)
+
+    return func.HttpResponse(
+        json.dumps(response_body),
+        mimetype="application/json",
+        status_code=200,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Generic Orchestrator (HD-015, updated HD-017)
 # ---------------------------------------------------------------------------
 @app.orchestration_trigger(context_name="context")
 def generic_workflow_orchestrator(context: df.DurableOrchestrationContext):
-    """
-    Walks a workflow_definition's states end to end using only data read
-    via activity functions — never category-specific logic. Only ever
-    auto-advances 'advance'-action transitions; role-gated transitions
-    (like TEST_APPROVAL's approve/reject) are left for POST
-    /api/workflow/action to apply directly against the store (see this
-    file's module docstring for the full explanation).
-    """
     input_data = context.get_input()
     workflow_def_id = input_data["workflowDefId"]
     existing_instance_id = input_data.get("existingInstanceId")
@@ -255,15 +340,11 @@ def generic_workflow_orchestrator(context: df.DurableOrchestrationContext):
         instance_id = yield context.call_activity("create_workflow_instance", workflow_def_id)
 
     transitions_taken = []
-
     while True:
         step_result = yield context.call_activity("advance_workflow_instance", instance_id)
-
         if step_result["error"]:
             break
-
         transitions_taken.append(step_result["transition"])
-
         if step_result["is_terminal"]:
             break
 
@@ -289,10 +370,6 @@ def create_workflow_instance(workflowDefId: str) -> str:
 
 @app.activity_trigger(input_name="instanceId")
 def advance_workflow_instance(instanceId: str) -> dict:
-    """Applies the next available 'advance'-action transition for this
-    instance's current state, if one exists. Role-gated actions (approve/
-    reject/etc.) are never attempted here — only POST /api/workflow/action
-    applies those, by design (see module docstring)."""
     store = get_store()
     try:
         instance = store.get_instance(instanceId)
@@ -304,7 +381,6 @@ def advance_workflow_instance(instanceId: str) -> dict:
         return {"error": None, "transition": None, "is_terminal": True}
 
     next_state = definition.next_state(instance.current_state, action="advance")
-
     if next_state is None:
         return {"error": "No transition defined", "transition": None, "is_terminal": True}
 
@@ -313,7 +389,6 @@ def advance_workflow_instance(instanceId: str) -> dict:
     store.save_instance(instance)
 
     logging.info(f"Instance {instanceId}: {from_state} -> {next_state}")
-
     return {
         "error": None,
         "transition": {"from": from_state, "to": next_state, "action": "advance"},
@@ -327,7 +402,7 @@ def advance_workflow_instance(instanceId: str) -> dict:
 @app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def health(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(
-        json.dumps({"status": "ok", "service": "it-helpdesk-api", "ticket": "HD-018"}),
+        json.dumps({"status": "ok", "service": "it-helpdesk-api", "ticket": "HD-028-029"}),
         mimetype="application/json",
         status_code=200,
     )
