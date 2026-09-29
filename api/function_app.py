@@ -19,6 +19,17 @@ HD-040 (this revision) — GET /api/identity/authMethods?upn=:
   plumbing" pattern as every route above. HD-039 (SSPR tile) and HD-041
   (wizard UI) are frontend-only tickets built on top of this endpoint — see
   web/index.html — and require no further backend changes.
+HD-045/046 (this revision) — Knowledge Base:
+  - GET /api/kb/search?query= — simple case-insensitive keyword match
+    against article title/body, delegating to kb_api.py + kb_store.py.
+    An unmatched query is a valid 200 with an empty results list, not an
+    error (HD-045's core acceptance criterion).
+  - POST /api/kb/feedback — records a Yes/No "was this helpful" response
+    against an article. Always inserts a NEW row, even for a repeated
+    submission from the same session — see kb_store.py's module docstring
+    for why this is deliberately append-only, not an upsert. HD-047's
+    search + feedback UI is frontend-only, built on top of these two
+    endpoints — see web/index.html.
 *** Scope note carried from every prior module's docstring — repeated here
 because it matters at the point where routes are wired up: 'callerRole'
 (HD-018), 'requesterUpn'/'role' (HD-028/029), CMDB reads (HD-019/020/021),
@@ -86,6 +97,17 @@ from identity_api import (
     AuthMethodsValidationError,
 )
 from graph_api import get_auth_methods
+from kb_store import get_kb_store
+from kb_api import (
+    parse_search_query,
+    build_search_response,
+    parse_feedback_request,
+    submit_feedback,
+    build_feedback_response,
+    SearchValidationError,
+    FeedbackRequestValidationError,
+    ArticleNotFoundError,
+)
 
 app = df.DFApp(http_auth_level=func.AuthLevel.FUNCTION)
 
@@ -405,6 +427,76 @@ def identity_get_auth_methods(req: func.HttpRequest) -> func.HttpResponse:
 
 
 # ---------------------------------------------------------------------------
+# HD-045: GET /api/kb/search?query=
+# ---------------------------------------------------------------------------
+@app.route(route="kb/search", methods=["GET"])
+def kb_search(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Query string: ?query=password
+    HTTP status mapping:
+    - 400: 'query' query parameter missing or empty
+    - 200: returns { query, count, results: [...] }, possibly an empty
+      results list if no article matches — per HD-045's core acceptance
+      criterion, an unmatched query is a valid 200 response, not an error.
+    """
+    try:
+        query = parse_search_query(dict(req.params))
+    except SearchValidationError as e:
+        return func.HttpResponse(
+            json.dumps(build_error_response(str(e))),
+            mimetype="application/json",
+            status_code=400,
+        )
+    store = get_kb_store()
+    articles = store.search_articles(query)
+    response_body = build_search_response(articles, query)
+    return func.HttpResponse(
+        json.dumps(response_body),
+        mimetype="application/json",
+        status_code=200,
+    )
+
+
+# ---------------------------------------------------------------------------
+# HD-046: POST /api/kb/feedback
+# ---------------------------------------------------------------------------
+@app.route(route="kb/feedback", methods=["POST"])
+def kb_feedback(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Body: { "articleId": "...", "helpful": true, "sessionId": "..." (optional) }
+    HTTP status mapping:
+    - 400: request body missing/malformed, or 'articleId'/'helpful' invalid
+    - 404: articleId does not refer to a known article
+    - 200: feedback recorded — always as a NEW row, even for a repeated
+      submission from the same session (see kb_store.py's module docstring
+      for why this is deliberately append-only, not an upsert).
+    """
+    try:
+        parsed = parse_feedback_request(req.get_body())
+    except FeedbackRequestValidationError as e:
+        return func.HttpResponse(
+            json.dumps(build_error_response(str(e))),
+            mimetype="application/json",
+            status_code=400,
+        )
+    store = get_kb_store()
+    try:
+        entry = submit_feedback(store, parsed["articleId"], parsed["sessionId"], parsed["helpful"])
+    except ArticleNotFoundError as e:
+        return func.HttpResponse(
+            json.dumps(build_error_response(str(e))),
+            mimetype="application/json",
+            status_code=404,
+        )
+    response_body = build_feedback_response(entry)
+    return func.HttpResponse(
+        json.dumps(response_body),
+        mimetype="application/json",
+        status_code=200,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Generic Orchestrator (HD-015, updated HD-017)
 # ---------------------------------------------------------------------------
 @app.orchestration_trigger(context_name="context")
@@ -482,7 +574,7 @@ def advance_workflow_instance(instanceId: str) -> dict:
 @app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def health(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(
-        json.dumps({"status": "ok", "service": "it-helpdesk-api", "ticket": "HD-039-040-041"}),
+        json.dumps({"status": "ok", "service": "it-helpdesk-api", "ticket": "HD-044-045-046"}),
         mimetype="application/json",
         status_code=200,
     )
