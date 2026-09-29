@@ -67,12 +67,15 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+
       - name: 'Deploy to Azure Functions (it-helpdesk-api)'
         uses: Azure/functions-action@v1
         with:
           app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
           package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
-
+          remote-build: true
+          
+     
       - name: 'Azure logout'
         run: az logout
         if: always()
