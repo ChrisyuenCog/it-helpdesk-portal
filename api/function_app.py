@@ -10,42 +10,24 @@ HD-027: GET /api/workflow/instance/{instanceId}.
 HD-028/029: GET /api/workflow/myRequests, GET /api/workflow/myApprovals.
 HD-019/020/021: GET /api/cmdb/ci/{ciId}, GET /api/cmdb/ci?class=&owner=,
   GET /api/cmdb/relationships?ciId=.
-HD-026/030/033/034 (this revision) — Hardware Request backend:
-  - HARDWARE_REQUEST is now seeded (workflow_store.py) and runs on the
-    SAME generic orchestrator below with ZERO new orchestrator code — this
-    file still contains no references to "Hardware" as a Python
-    conditional, only as workflow_definition DATA.
-  - workflow_action (HTTP-triggered, human-actioned transitions) now also:
-      * validates transition.requiredFields via check_required_fields
-        (HD-033's hard gate — e.g. AwaitingSerialCapture->Fulfilled cannot
-        proceed without a non-blank 'serialNumber' in the request body's
-        'fields' object) — raises MissingRequiredFieldError -> HTTP 400.
-      * resolves an expected approver via resolve_expected_approver, for
-        the (currently theoretical, but supported for symmetry/future use)
-        case of a human-actioned transition also declaring
-        'resolveApprover'.
-      * applies onEnterEffects via workflow_effects_api.apply_enter_effects
-        AFTER the instance is saved — HD-034's Fulfilled-entry CI creation
-        runs here, since captureSerial is a human-actioned transition.
-  - advance_workflow_instance (the Durable activity function driving
-    SYSTEM/auto "advance" transitions) now ALSO calls
-    resolve_expected_approver and apply_enter_effects, for full symmetry:
-    HARDWARE_REQUEST's Submitted->ManagerApproval transition is an
-    "advance" transition (per MVP Specification Section 4.1: "Submitted |
-    (auto)"), so HD-030's manager-resolution fires HERE, inside the
-    orchestrator's own activity function, not inside workflow_action.
-    Both call sites share the exact same two generic functions — there is
-    exactly one implementation of "what does entering a state with these
-    transition properties actually do", used identically regardless of
-    whether a human or the orchestrator triggered the transition.
-*** Scope note carried from workflow_action_api.py / workflow_list_api.py /
-graph_api.py — repeated here because it matters at the point where routes
-are wired up: 'callerRole' (HD-018), 'requesterUpn'/'role' (HD-028/029),
-and CMDB reads (HD-019/020/021) are all unauthenticated/caller-supplied for
-MVP demonstration purposes; Graph-based manager resolution (HD-030) is
-similarly best-effort until HD-012's Entra App Registration ships. None of
-this is yet a real access-control or identity boundary — that is Sprint 4's
-Security Hardening epic (HD-066). ***
+HD-026/030/033/034: HARDWARE_REQUEST backend — requiredFields hard gate,
+  dynamic approver resolution, generic onEnterEffects (createCi).
+HD-040 (this revision) — GET /api/identity/authMethods?upn=:
+  Thin HTTP trigger delegating to identity_api.py (request parsing/response
+  shaping) and graph_api.py (the actual Graph call, HD-030's sibling
+  function). Same "logic lives in its own module, HTTP trigger is just
+  plumbing" pattern as every route above. HD-039 (SSPR tile) and HD-041
+  (wizard UI) are frontend-only tickets built on top of this endpoint — see
+  web/index.html — and require no further backend changes.
+*** Scope note carried from every prior module's docstring — repeated here
+because it matters at the point where routes are wired up: 'callerRole'
+(HD-018), 'requesterUpn'/'role' (HD-028/029), CMDB reads (HD-019/020/021),
+and now 'upn' (HD-040) are all unauthenticated/caller-supplied for MVP
+demonstration purposes; Graph-based manager resolution (HD-030) and
+Graph-based auth-methods lookup (HD-040) are similarly best-effort until
+HD-012's Entra App Registration ships. None of this is yet a real
+access-control or identity boundary — that is Sprint 4's Security
+Hardening epic (HD-066). ***
 """
 import json
 import logging
@@ -98,6 +80,12 @@ from cmdb_api import (
     RelationshipsValidationError,
 )
 from workflow_effects_api import apply_enter_effects
+from identity_api import (
+    parse_auth_methods_query,
+    build_auth_methods_response,
+    AuthMethodsValidationError,
+)
+from graph_api import get_auth_methods
 
 app = df.DFApp(http_auth_level=func.AuthLevel.FUNCTION)
 
@@ -159,8 +147,6 @@ async def workflow_start(req: func.HttpRequest, client) -> func.HttpResponse:
 
 # ---------------------------------------------------------------------------
 # HD-018: POST /api/workflow/action
-# HD-026/030/033/034: extended with requiredFields gate, approver
-# resolution, and onEnterEffects — see module docstring.
 # ---------------------------------------------------------------------------
 @app.route(route="workflow/action", methods=["POST"])
 def workflow_action(req: func.HttpRequest) -> func.HttpResponse:
@@ -385,6 +371,40 @@ def cmdb_get_relationships(req: func.HttpRequest) -> func.HttpResponse:
 
 
 # ---------------------------------------------------------------------------
+# HD-040: GET /api/identity/authMethods?upn=
+# ---------------------------------------------------------------------------
+@app.route(route="identity/authMethods", methods=["GET"])
+def identity_get_auth_methods(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Query string: ?upn=chris.yuen@cognitionlearninggroup.com
+    HTTP status mapping:
+    - 400: 'upn' query parameter missing or empty
+    - 200: ALWAYS returned for a syntactically valid request — even when
+      the underlying Graph call fails or HD-012 isn't provisioned yet, in
+      which case the response body's 'available' key is False with a
+      human-readable 'reason' (see identity_api.py's
+      build_auth_methods_response docstring for why this is a 200, not a
+      5xx: Graph unavailability is a normal, expected MVP-stage condition,
+      not a caller error).
+    """
+    try:
+        upn = parse_auth_methods_query(dict(req.params))
+    except AuthMethodsValidationError as e:
+        return func.HttpResponse(
+            json.dumps(build_error_response(str(e))),
+            mimetype="application/json",
+            status_code=400,
+        )
+    methods = get_auth_methods(upn)
+    response_body = build_auth_methods_response(upn, methods)
+    return func.HttpResponse(
+        json.dumps(response_body),
+        mimetype="application/json",
+        status_code=200,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Generic Orchestrator (HD-015, updated HD-017)
 # ---------------------------------------------------------------------------
 @app.orchestration_trigger(context_name="context")
@@ -414,9 +434,6 @@ def generic_workflow_orchestrator(context: df.DurableOrchestrationContext):
 
 # ---------------------------------------------------------------------------
 # Activity Functions — the only place that touches the WorkflowStore
-# HD-026/030/034: advance_workflow_instance now ALSO applies approver
-# resolution and onEnterEffects for SYSTEM/auto "advance" transitions —
-# see module docstring for why this mirrors workflow_action's handling.
 # ---------------------------------------------------------------------------
 @app.activity_trigger(input_name="workflowDefId")
 def create_workflow_instance(workflowDefId: str) -> str:
@@ -465,7 +482,7 @@ def advance_workflow_instance(instanceId: str) -> dict:
 @app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def health(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(
-        json.dumps({"status": "ok", "service": "it-helpdesk-api", "ticket": "HD-026-030-033-034"}),
+        json.dumps({"status": "ok", "service": "it-helpdesk-api", "ticket": "HD-039-040-041"}),
         mimetype="application/json",
         status_code=200,
     )
