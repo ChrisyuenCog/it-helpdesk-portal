@@ -7,43 +7,45 @@ HD-016: TEST workflow_definition seeded.
 HD-017: POST /api/workflow/start.
 HD-018: POST /api/workflow/action.
 HD-027: GET /api/workflow/instance/{instanceId}.
-HD-028/029:
-  - workflow_start now captures the caller-supplied 'requesterUpn' from
-    the request body (already parsed by workflow_api.parse_start_request,
-    but previously discarded — never passed to store.create_instance())
-    and threads it through so instances are attributable to a requester.
-  - GET /api/workflow/myRequests — a Requester's own submitted requests
-    across every category, via ?requesterUpn=.
-  - GET /api/workflow/myApprovals — every instance currently awaiting a
-    given role's decision, across every category, via ?role=.
-  Both new routes are thin HTTP triggers delegating to workflow_list_api.py,
-  the same "logic lives in its own module" pattern as every prior ticket.
-HD-019/020/021 (this revision) — CMDB read endpoints, Batch A:
-  - GET /api/cmdb/ci/{ciId} — fetch any CI by ID, regardless of class.
-  - GET /api/cmdb/ci?class=&owner= — powers My Devices; owner filtering is
-    resolved via ci_relationship 'user has' edges, not a plain ci_base.owner
-    match (see cmdb_store.py's module docstring for the full rationale).
-  - GET /api/cmdb/relationships?ciId= — traverse relationships for a CI in
-    either direction (fromCiId or toCiId).
-  All three are thin HTTP triggers delegating to cmdb_api.py, the same
-  "logic lives in its own module, HTTP trigger is just plumbing" pattern
-  used by every workflow endpoint above. This file still contains zero
-  references to "Hardware", "Tender", or "Incident" — CMDB reads are
-  generic across every CI class, exactly like the workflow orchestrator is
-  generic across every workflow category.
-*** Scope note carried from workflow_action_api.py / workflow_list_api.py —
-repeated here because it matters at the point where routes are wired up:
-'callerRole' (HD-018) and 'requesterUpn'/'role' (HD-028/029) are all
-accepted directly from the caller (request body or query string) for MVP
-demonstration purposes. None are yet backed by validated Entra ID token
-claims. The same applies to HD-019/020/021's CMDB reads — there is no
-Row-Level Security yet (that is HD-066, Sprint 4). Treat these endpoints as
-functionally correct but NOT YET a real access-control boundary until
-Sprint 4's Security Hardening work wires them to genuine identity. ***
-Design principle (per MVP Specification, Section 3.3): ONE orchestrator
-drives every workflow type. This file contains zero references to
-"Hardware", "Tender", or "Incident" — those categories are added purely as
-new rows in the workflow_store, never as new orchestrator code.
+HD-028/029: GET /api/workflow/myRequests, GET /api/workflow/myApprovals.
+HD-019/020/021: GET /api/cmdb/ci/{ciId}, GET /api/cmdb/ci?class=&owner=,
+  GET /api/cmdb/relationships?ciId=.
+HD-026/030/033/034 (this revision) — Hardware Request backend:
+  - HARDWARE_REQUEST is now seeded (workflow_store.py) and runs on the
+    SAME generic orchestrator below with ZERO new orchestrator code — this
+    file still contains no references to "Hardware" as a Python
+    conditional, only as workflow_definition DATA.
+  - workflow_action (HTTP-triggered, human-actioned transitions) now also:
+      * validates transition.requiredFields via check_required_fields
+        (HD-033's hard gate — e.g. AwaitingSerialCapture->Fulfilled cannot
+        proceed without a non-blank 'serialNumber' in the request body's
+        'fields' object) — raises MissingRequiredFieldError -> HTTP 400.
+      * resolves an expected approver via resolve_expected_approver, for
+        the (currently theoretical, but supported for symmetry/future use)
+        case of a human-actioned transition also declaring
+        'resolveApprover'.
+      * applies onEnterEffects via workflow_effects_api.apply_enter_effects
+        AFTER the instance is saved — HD-034's Fulfilled-entry CI creation
+        runs here, since captureSerial is a human-actioned transition.
+  - advance_workflow_instance (the Durable activity function driving
+    SYSTEM/auto "advance" transitions) now ALSO calls
+    resolve_expected_approver and apply_enter_effects, for full symmetry:
+    HARDWARE_REQUEST's Submitted->ManagerApproval transition is an
+    "advance" transition (per MVP Specification Section 4.1: "Submitted |
+    (auto)"), so HD-030's manager-resolution fires HERE, inside the
+    orchestrator's own activity function, not inside workflow_action.
+    Both call sites share the exact same two generic functions — there is
+    exactly one implementation of "what does entering a state with these
+    transition properties actually do", used identically regardless of
+    whether a human or the orchestrator triggered the transition.
+*** Scope note carried from workflow_action_api.py / workflow_list_api.py /
+graph_api.py — repeated here because it matters at the point where routes
+are wired up: 'callerRole' (HD-018), 'requesterUpn'/'role' (HD-028/029),
+and CMDB reads (HD-019/020/021) are all unauthenticated/caller-supplied for
+MVP demonstration purposes; Graph-based manager resolution (HD-030) is
+similarly best-effort until HD-012's Entra App Registration ships. None of
+this is yet a real access-control or identity boundary — that is Sprint 4's
+Security Hardening epic (HD-066). ***
 """
 import json
 import logging
@@ -62,11 +64,14 @@ from workflow_action_api import (
     parse_action_request,
     resolve_transition,
     check_role_permission,
+    check_required_fields,
+    resolve_expected_approver,
     determine_approval_status,
     build_action_success_response,
     ActionRequestValidationError,
     ActionNotAllowedError,
     RoleNotPermittedError,
+    MissingRequiredFieldError,
 )
 from workflow_instance_api import (
     parse_instance_id,
@@ -92,6 +97,7 @@ from cmdb_api import (
     CiNotFoundError,
     RelationshipsValidationError,
 )
+from workflow_effects_api import apply_enter_effects
 
 app = df.DFApp(http_auth_level=func.AuthLevel.FUNCTION)
 
@@ -111,7 +117,7 @@ async def workflow_start(req: func.HttpRequest, client) -> func.HttpResponse:
             status_code=400,
         )
     workflow_def_id = parsed["workflowDefId"]
-    requester_upn = parsed.get("requesterUpn")  # HD-028: now actually used, not discarded
+    requester_upn = parsed.get("requesterUpn")
     store = get_store()
     try:
         validate_workflow_def_id(store, workflow_def_id)
@@ -153,6 +159,8 @@ async def workflow_start(req: func.HttpRequest, client) -> func.HttpResponse:
 
 # ---------------------------------------------------------------------------
 # HD-018: POST /api/workflow/action
+# HD-026/030/033/034: extended with requiredFields gate, approver
+# resolution, and onEnterEffects — see module docstring.
 # ---------------------------------------------------------------------------
 @app.route(route="workflow/action", methods=["POST"])
 def workflow_action(req: func.HttpRequest) -> func.HttpResponse:
@@ -201,9 +209,21 @@ def workflow_action(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json",
             status_code=403,
         )
+    try:
+        check_required_fields(transition, parsed["fields"])
+    except MissingRequiredFieldError as e:
+        return func.HttpResponse(
+            json.dumps(build_error_response(str(e))),
+            mimetype="application/json",
+            status_code=400,
+        )
     from_state = instance.current_state
     to_state = transition["to"]
-    instance.record_transition(from_state, to_state, parsed["action"])
+    expected_approver = resolve_expected_approver(transition, instance)
+    instance.record_transition(
+        from_state, to_state, parsed["action"],
+        fields=parsed["fields"], expected_approver_upn=expected_approver,
+    )
     store.save_instance(instance)
     approval_entry = None
     if transition.get("requiredRole"):
@@ -211,12 +231,16 @@ def workflow_action(req: func.HttpRequest) -> func.HttpResponse:
         approval_entry = store.append_approval_entry(
             instance.instance_id, parsed["callerUpn"], status
         )
+    cmdb_store = get_cmdb_store()
+    effects = apply_enter_effects(cmdb_store, instance, transition)
     logging.info(
         f"HD-018: instance {instance.instance_id} action='{parsed['action']}' "
         f"{from_state} -> {to_state}"
         + (f", approval_chain entry recorded (status={approval_entry.status})" if approval_entry else "")
+        + (f", expectedApprover={expected_approver}" if expected_approver else "")
+        + (f", effects={effects}" if effects else "")
     )
-    response_body = build_action_success_response(instance, transition, approval_entry)
+    response_body = build_action_success_response(instance, transition, approval_entry, effects)
     return func.HttpResponse(
         json.dumps(response_body),
         mimetype="application/json",
@@ -258,16 +282,6 @@ def workflow_get_instance(req: func.HttpRequest) -> func.HttpResponse:
 # ---------------------------------------------------------------------------
 @app.route(route="workflow/myRequests", methods=["GET"])
 def workflow_my_requests(req: func.HttpRequest) -> func.HttpResponse:
-    """
-    Query string: ?requesterUpn=chris.yuen@cognitionlearninggroup.com
-    HTTP status mapping:
-    - 400: 'requesterUpn' query parameter missing or empty
-    - 200: returns { requesterUpn, count, instances: [...] }, possibly
-      an empty instances list if this requester has never started one
-    See this file's module docstring and workflow_list_api.py's for the
-    MVP identity scope note — requesterUpn is caller-supplied, not yet
-    validated against a real signed-in identity.
-    """
     try:
         requester_upn = parse_my_requests_query(dict(req.params))
     except MyRequestsValidationError as e:
@@ -291,20 +305,6 @@ def workflow_my_requests(req: func.HttpRequest) -> func.HttpResponse:
 # ---------------------------------------------------------------------------
 @app.route(route="workflow/myApprovals", methods=["GET"])
 def workflow_my_approvals(req: func.HttpRequest) -> func.HttpResponse:
-    """
-    Query string: ?role=Approver (or ITAgent, ITAdmin, etc. — any value
-    that appears as a 'requiredRole' on some workflow_definition's
-    transitions)
-    HTTP status mapping:
-    - 400: 'role' query parameter missing or empty
-    - 200: returns { role, count, instances: [...] } — every non-terminal
-      instance whose current state has an outgoing transition requiring
-      this role, across every workflow category
-    See workflow_store.py's module docstring for why this is implemented
-    as a derived query rather than reading stored 'Pending' approval_chain
-    rows (this MVP's approval_chain rows are only ever written after a
-    decision is actioned, never before).
-    """
     try:
         role = parse_my_approvals_query(dict(req.params))
     except MyApprovalsValidationError as e:
@@ -328,14 +328,6 @@ def workflow_my_approvals(req: func.HttpRequest) -> func.HttpResponse:
 # ---------------------------------------------------------------------------
 @app.route(route="cmdb/ci/{ciId}", methods=["GET"])
 def cmdb_get_ci(req: func.HttpRequest) -> func.HttpResponse:
-    """
-    HTTP status mapping:
-    - 404: ciId path parameter missing, or does not refer to a known CI
-    - 200: returns the CI's current fields (ciId, ciClass, name, status,
-      owner, entity, createdAt)
-    See cmdb_store.py's module docstring for the MVP scope note on why
-    ValidFrom/ValidTo system-time columns are not part of this response.
-    """
     store = get_cmdb_store()
     try:
         ci_id = parse_ci_id(req.route_params.get("ciId"))
@@ -358,16 +350,6 @@ def cmdb_get_ci(req: func.HttpRequest) -> func.HttpResponse:
 # ---------------------------------------------------------------------------
 @app.route(route="cmdb/ci", methods=["GET"])
 def cmdb_list_ci(req: func.HttpRequest) -> func.HttpResponse:
-    """
-    Query string: ?class=Hardware&owner=chris.yuen@cognitionlearninggroup.com
-    Both filters are optional; omitting both returns every CI. When 'owner'
-    is supplied, results are restricted to CIs reachable via a 'user has'
-    ci_relationship from that owner's UPN — see cmdb_store.py's module
-    docstring for the full rationale (this is what powers My Devices).
-    HTTP status mapping:
-    - 200: returns { class, owner, count, items: [...] }, possibly an
-      empty items list if no CI matches the supplied filters
-    """
     store = get_cmdb_store()
     filters = parse_list_ci_query(dict(req.params))
     cis = store.list_ci(ci_class=filters["ci_class"], owner=filters["owner"])
@@ -384,16 +366,6 @@ def cmdb_list_ci(req: func.HttpRequest) -> func.HttpResponse:
 # ---------------------------------------------------------------------------
 @app.route(route="cmdb/relationships", methods=["GET"])
 def cmdb_get_relationships(req: func.HttpRequest) -> func.HttpResponse:
-    """
-    Query string: ?ciId=<a known ciId>
-    Direction-agnostic: returns every relationship where the supplied ciId
-    appears as EITHER fromCiId OR toCiId, so querying either a User CI or
-    a Hardware CI returns the same 'user has' row.
-    HTTP status mapping:
-    - 400: 'ciId' query parameter missing or empty
-    - 200: returns { ciId, count, relationships: [...] }, possibly an
-      empty relationships list if this CI has none
-    """
     try:
         ci_id = parse_relationships_query(dict(req.params))
     except RelationshipsValidationError as e:
@@ -442,6 +414,9 @@ def generic_workflow_orchestrator(context: df.DurableOrchestrationContext):
 
 # ---------------------------------------------------------------------------
 # Activity Functions — the only place that touches the WorkflowStore
+# HD-026/030/034: advance_workflow_instance now ALSO applies approver
+# resolution and onEnterEffects for SYSTEM/auto "advance" transitions —
+# see module docstring for why this mirrors workflow_action's handling.
 # ---------------------------------------------------------------------------
 @app.activity_trigger(input_name="workflowDefId")
 def create_workflow_instance(workflowDefId: str) -> str:
@@ -462,13 +437,21 @@ def advance_workflow_instance(instanceId: str) -> dict:
         return {"error": str(e), "transition": None, "is_terminal": True}
     if definition.is_terminal(instance.current_state):
         return {"error": None, "transition": None, "is_terminal": True}
-    next_state = definition.next_state(instance.current_state, action="advance")
-    if next_state is None:
+    transition = definition.get_transition(instance.current_state, "advance")
+    if transition is None:
         return {"error": "No transition defined", "transition": None, "is_terminal": True}
     from_state = instance.current_state
-    instance.record_transition(from_state, next_state, action="advance")
+    next_state = transition["to"]
+    expected_approver = resolve_expected_approver(transition, instance)
+    instance.record_transition(from_state, next_state, action="advance", expected_approver_upn=expected_approver)
     store.save_instance(instance)
-    logging.info(f"Instance {instanceId}: {from_state} -> {next_state}")
+    cmdb_store = get_cmdb_store()
+    effects = apply_enter_effects(cmdb_store, instance, transition)
+    logging.info(
+        f"Instance {instanceId}: {from_state} -> {next_state}"
+        + (f", expectedApprover={expected_approver}" if expected_approver else "")
+        + (f", effects={effects}" if effects else "")
+    )
     return {
         "error": None,
         "transition": {"from": from_state, "to": next_state, "action": "advance"},
@@ -482,7 +465,7 @@ def advance_workflow_instance(instanceId: str) -> dict:
 @app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def health(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(
-        json.dumps({"status": "ok", "service": "it-helpdesk-api", "ticket": "HD-019-020-021"}),
+        json.dumps({"status": "ok", "service": "it-helpdesk-api", "ticket": "HD-026-030-033-034"}),
         mimetype="application/json",
         status_code=200,
     )
