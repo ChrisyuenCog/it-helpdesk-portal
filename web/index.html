@@ -292,7 +292,7 @@
       <div class="grid">
         <div class="tile enabled" id="tile-hardware">Hardware Request</div>
         <div class="tile disabled">My Devices</div>
-        <div class="tile disabled">Password / SSPR</div>
+        <div class="tile enabled" id="tile-sspr">Password / SSPR</div>
         <div class="tile disabled">Policy Library</div>
         <div class="tile disabled">Certificates</div>
         <div class="tile disabled">Tender Pack</div>
@@ -309,6 +309,19 @@
       <textarea id="hwJustification" placeholder="Why do you need this item?"></textarea>
       <button class="btn btn-primary" id="hwSubmitBtn">Submit Request</button>
       <div id="hwFormResult"></div>
+    </div>
+
+    <!-- HD-039/041: Password / SSPR tile + guided wizard -->
+    <div class="card" id="ssprPanel" style="display:none;">
+      <h2>Password &amp; Identity Self-Service</h2>
+      <p class="subtitle">Reset your password or check whether you're protected against account lockout.</p>
+      <a href="https://aka.ms/sspr" target="_blank" rel="noopener" class="btn btn-primary" style="text-decoration:none; display:inline-block;">
+        Go to aka.ms/sspr &#8599;
+      </a>
+      <div class="detail-panel">
+        <p style="font-weight:600; margin-bottom:0.4rem;">Your registered methods</p>
+        <div id="ssprWizardResult"><div class="empty-state">Checking your registration status…</div></div>
+      </div>
     </div>
   </div>
 
@@ -486,6 +499,57 @@ document.getElementById("tile-hardware").addEventListener("click", () => {
   const formEl = document.getElementById("hwRequestForm");
   formEl.style.display = formEl.style.display === "none" ? "block" : "none";
 });
+
+// ----------------------------------------------------------------------------
+// HD-039/041: Password / SSPR tile + guided wizard
+// ----------------------------------------------------------------------------
+document.getElementById("tile-sspr").addEventListener("click", () => {
+  const panelEl = document.getElementById("ssprPanel");
+  const wasHidden = panelEl.style.display === "none" || !panelEl.style.display;
+  panelEl.style.display = wasHidden ? "block" : "none";
+  if (wasHidden) loadAuthMethodsWizard();
+});
+
+async function loadAuthMethodsWizard() {
+  const resultEl = document.getElementById("ssprWizardResult");
+  resultEl.innerHTML = `<div class="empty-state">Checking your registration status…</div>`;
+  const session = getSession();
+  try {
+    const data = await apiCall(`/identity/authMethods?upn=${encodeURIComponent(session.upn)}`);
+    if (!data.available) {
+      // HD-040/041 MVP scope: Graph isn't reachable yet (HD-012 not
+      // provisioned). Fail-soft, neutral guidance rather than blocking —
+      // matches identity_api.py's build_auth_methods_response docstring.
+      resultEl.innerHTML = `
+        <div class="scope-note" style="margin-bottom:0;">
+          We can't automatically check your registration status yet (${data.reason})
+          To be safe, please open <a href="https://aka.ms/sspr" target="_blank" rel="noopener">aka.ms/sspr</a>
+          and confirm you have at least one recovery method registered.
+        </div>`;
+      return;
+    }
+    if (!data.hasAnyMethod) {
+      resultEl.innerHTML = `
+        <div class="error-box">
+          You currently have <strong>zero registered authentication methods</strong>. Under the
+          September 2026 SSPR enforcement change, you may be locked out of your account if this
+          isn't fixed. Click "Go to aka.ms/sspr" above now to register a method.
+        </div>`;
+      return;
+    }
+    resultEl.innerHTML = `
+      <div class="success-box">
+        You already have ${data.methodCount} method${data.methodCount === 1 ? "" : "s"} registered — you're
+        protected against account lockout.
+      </div>
+      <table style="margin-top:0.75rem;">
+        <thead><tr><th>Method</th></tr></thead>
+        <tbody>${data.methods.map(m => `<tr><td>${m.type}</td></tr>`).join("")}</tbody>
+      </table>`;
+  } catch (e) {
+    resultEl.innerHTML = `<div class="error-box">${e.message}</div>`;
+  }
+}
 
 // ----------------------------------------------------------------------------
 // HD-036: Submit Hardware Request
