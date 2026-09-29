@@ -12,36 +12,36 @@ the REQUEST BODY, not from a validated Microsoft Entra ID token claim. This
 is a deliberate, temporary MVP simplification — see HD-066, Security
 Hardening. Until that lands, 'callerRole' is NOT a real access-control
 boundary.
-HD-026/030/033/034 (this revision) — Hardware Request backend:
+HD-026/030/033/034:
   - parse_action_request() gains an optional 'fields' key in the request
     body (e.g. {"serialNumber": "SN123"}), returned in the parsed dict as
-    parsed["fields"] (defaults to {} if absent — never None, so callers
-    never need a None-check before passing it to instance.record_transition
-    or check_required_fields).
-  - check_role_permission() now accepts a transition whose 'requiredRole'
-    is EITHER a single string (unchanged) OR a list of acceptable roles
-    (new, e.g. HARDWARE_REQUEST's ITApproval transitions, actionable by
-    EITHER 'ITAgent' OR 'ITAdmin'). Delegates to
-    workflow_store.normalize_required_roles() so this function and
-    WorkflowDefinition.roles_pending_from() can never disagree on what a
-    transition's requiredRole actually means.
+    parsed["fields"] (defaults to {} if absent).
+  - check_role_permission() accepts a transition whose 'requiredRole' is
+    EITHER a single string (unchanged) OR a list of acceptable roles (new,
+    e.g. HARDWARE_REQUEST's ITApproval transitions, actionable by EITHER
+    'ITAgent' OR 'ITAdmin'). Delegates to
+    workflow_store.normalize_required_roles().
   - check_required_fields() / MissingRequiredFieldError — HD-033's hard
-    gate, implemented GENERICALLY: a transition may declare
-    'requiredFields': ["serialNumber"], and this function raises if any
-    named field is missing or blank in the caller-supplied 'fields' dict.
-    Nothing here says "Hardware" or "serialNumber" specifically — those are
-    DATA on the HARDWARE_REQUEST workflow_definition (see
-    workflow_store.py's _seed_hardware_request_definition), not code here.
-  - resolve_expected_approver() — HD-030's dynamic-approver resolution. A
-    transition may declare 'resolveApprover': "requesterManager", meaning
-    "when this transition is taken, look up the requester's manager via
-    Graph and record it as the expected approver for the state being
-    entered." The actual Graph call is injected as `resolve_manager_upn_fn`
-    (defaults to graph_api.resolve_manager_upn) so this function is fully
-    offline-testable with a fake resolver — this function contains no
-    Graph-specific code itself, only the generic "if this transition asks
-    for approver resolution, call the injected resolver and return its
-    result (or None on any failure)" logic.
+    gate, implemented generically via a transition's 'requiredFields' list.
+  - resolve_expected_approver() — HD-030's dynamic-approver resolution.
+HD-026/030 PRODUCTION FIX (this revision):
+  A live-deployment bug was found and fixed here: the deferred
+  `from graph_api import resolve_manager_upn` import was previously OUTSIDE
+  the try/except block, so any import-time failure of graph_api.py inside
+  the live Azure Functions worker (module path/packaging issue, or any
+  other cause) raised an UNHANDLED exception straight up through
+  advance_workflow_instance's Durable Functions activity call — causing
+  the entire activity invocation to fail silently from the caller's
+  perspective (the workflow_instance was created but its history stayed
+  permanently empty, stuck at its initial state, with no error surfaced to
+  GET /api/workflow/instance/{instanceId}). This was not caught by
+  test_workflow_action_api.py's offline tests because every test there
+  supplies resolve_manager_upn_fn explicitly, so the deferred import path
+  itself was never actually exercised. Fix: both the import AND the call
+  are now inside the SAME try/except — resolve_expected_approver() is
+  fully fail-soft end-to-end, exactly as its docstring already claimed,
+  with no exception able to escape regardless of WHERE it originates
+  (import time or call time).
 """
 from __future__ import annotations
 import json
@@ -72,12 +72,7 @@ class RoleNotPermittedError(Exception):
 class MissingRequiredFieldError(Exception):
     """HD-033: raised when a transition declares 'requiredFields' and one
     or more of those fields is missing or blank in the caller-supplied
-    'fields' dict — maps to HTTP 400 in function_app.py. Kept as its own
-    exception (distinct from ActionRequestValidationError, which is about
-    the request body's own SHAPE, and ActionNotAllowedError, which is about
-    the transition not existing) so each distinct failure reason maps to
-    its own, distinguishable error, matching this module's established
-    precedent."""
+    'fields' dict — maps to HTTP 400 in function_app.py."""
     pass
 
 
@@ -138,12 +133,9 @@ def resolve_transition(definition: WorkflowDefinition, instance: WorkflowInstanc
 
 def check_role_permission(transition: Dict[str, Any], caller_role: Optional[str]) -> None:
     """Raises RoleNotPermittedError if the transition requires a role and
-    the caller did not supply a matching one. HD-026/031: 'requiredRole'
-    may be a single string (unchanged) or a list of acceptable roles (new)
-    — normalize_required_roles() flattens either shape, so a caller
-    matching ANY one of the acceptable roles is permitted. A transition
-    with no requiredRole is permitted for any caller, preserving TEST's
-    original role-free behaviour exactly."""
+    the caller did not supply a matching one. 'requiredRole' may be a
+    single string or a list of acceptable roles — a caller matching ANY
+    one of the acceptable roles is permitted."""
     acceptable_roles = normalize_required_roles(transition.get("requiredRole"))
     if not acceptable_roles:
         return  # no role required — anyone may perform this transition
@@ -157,11 +149,7 @@ def check_role_permission(transition: Dict[str, Any], caller_role: Optional[str]
 def check_required_fields(transition: Dict[str, Any], fields: Dict[str, Any]) -> None:
     """HD-033: raises MissingRequiredFieldError if any field named in the
     transition's 'requiredFields' list is missing, None, or blank
-    (whitespace-only) in the caller-supplied 'fields' dict. A transition
-    with no 'requiredFields' key imposes no constraint — this preserves
-    every existing transition's behaviour (TEST, TEST_APPROVAL, and every
-    other HARDWARE_REQUEST transition except AwaitingSerialCapture->
-    Fulfilled) exactly."""
+    (whitespace-only) in the caller-supplied 'fields' dict."""
     required = transition.get("requiredFields", [])
     missing = []
     for field_name in required:
@@ -182,19 +170,18 @@ def resolve_expected_approver(
     """HD-030: if this transition declares 'resolveApprover': "requesterManager",
     calls the injected resolver (defaults to graph_api.resolve_manager_upn)
     with instance.requester_upn and returns its result. Returns None
-    (never raises) if 'resolveApprover' isn't set on this transition, if
-    the instance has no requester_upn, or if the resolver itself returns
-    None (e.g. Graph permissions not yet provisioned — see graph_api.py's
-    module docstring for the HD-012 dependency note). This function is
-    deliberately tolerant: a failed/unavailable approver resolution must
-    never block the underlying state transition itself."""
+    (never raises — see this module's docstring for the production fix
+    that closed a real gap here) if 'resolveApprover' isn't set, if the
+    instance has no requester_upn, or if resolution fails for ANY reason,
+    including a failure to import graph_api itself. A failed/unavailable
+    approver resolution must never block the underlying state transition."""
     if transition.get("resolveApprover") != "requesterManager":
         return None
     if not instance.requester_upn:
         return None
-    if resolve_manager_upn_fn is None:
-        from graph_api import resolve_manager_upn as resolve_manager_upn_fn
     try:
+        if resolve_manager_upn_fn is None:
+            from graph_api import resolve_manager_upn as resolve_manager_upn_fn
         return resolve_manager_upn_fn(instance.requester_upn)
     except Exception:
         return None
