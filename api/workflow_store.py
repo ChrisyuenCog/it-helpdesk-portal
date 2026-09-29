@@ -1,3 +1,4 @@
+
 """
 IT Helpdesk Portal — Workflow Store
 =====================================
@@ -16,36 +17,52 @@ HD-018:
   - InMemoryWorkflowStore now also seeds TEST_APPROVAL alongside TEST.
 HD-007: SlaClock dataclass + compute_sla_breached() (pure, offline-testable)
   + WorkflowStore.create_sla_clock() / get_sla_clock().
-HD-028/029 (this revision):
-  - WorkflowInstance gains requester_upn (Optional[str], defaults to None
-    so every existing caller of create_instance()/WorkflowInstance(...)
-    keeps working unchanged — this is an additive, backward-compatible
-    field, not a breaking signature change).
-  - WorkflowDefinition.roles_pending_from(state) — a small, pure helper:
-    returns the sorted set of distinct 'requiredRole' values found on any
-    transition whose 'from' is the given state. Used by
-    get_instances_pending_role() below to answer "which instances are
-    currently sitting in a state where THIS role could act on them?"
-    without needing a separately-maintained 'pending approval' table.
-    Design note (please read before assuming this should instead read
-    approval_chain rows with status='Pending'): the MVP Build Backlog's
-    literal wording for HD-029 ("...instances where an approval_chain row
-    references them with status Pending") describes ServiceNow-style
-    ticket ASSIGNMENT, which this MVP does not implement — approval_chain
-    rows here are only ever written AFTER a decision is actioned (see
-    workflow_action_api.py's determine_approval_status(), which maps
-    action -> 'Approved'/'Rejected', never 'Pending'). Introducing
-    'Pending' rows would require deciding who to name-assign a Pending row
-    to at instance-creation time, which this MVP's role-based (not
-    named-individual) approval model does not support. This revision
-    therefore implements "awaiting my decision" as a DERIVED query — is
-    this instance non-terminal, and does its current_state have an
-    outgoing transition requiring my role — which is behaviourally
-    equivalent (a manager sees exactly the instances they could act on
-    right now) without requiring a schema change to add named assignment.
-  - WorkflowStore.get_instances_by_requester() / get_instances_pending_role()
-    — same "abstract interface + InMemoryWorkflowStore implementation"
-    pattern already established for approval_chain/sla_clock.
+HD-028/029:
+  - WorkflowInstance gains requester_upn.
+  - WorkflowDefinition.roles_pending_from(state) — derived query support.
+  - WorkflowStore.get_instances_by_requester() / get_instances_pending_role().
+HD-026/030/033/034 (this revision) — Hardware Request backend:
+  - WorkflowDefinition transitions may now carry 'requiredRole' as EITHER a
+    single string (unchanged, e.g. TEST_APPROVAL's "Approver") OR a list of
+    acceptable roles (new, e.g. HARDWARE_REQUEST's ITApproval transitions,
+    actionable by EITHER 'ITAgent' OR 'ITAdmin'). normalize_required_roles()
+    is the single place that turns either shape into a flat list, used by
+    BOTH roles_pending_from() below and workflow_action_api.py's
+    check_role_permission(), so the two can never silently disagree on what
+    "this transition requires role X" means.
+  - WorkflowInstance.record_transition() gains two new OPTIONAL keyword
+    arguments: 'fields' (a dict of caller-supplied data captured at this
+    transition, e.g. {"serialNumber": "SN123"}) and 'expected_approver_upn'
+    (the dynamically-resolved approver for a transition entering an
+    approval state, e.g. via Graph manager lookup). CRITICAL DESIGN NOTE:
+    neither is a new persisted database column. Both are embedded as
+    OPTIONAL extra keys on the SAME history entry dict that already gets
+    appended and round-tripped as JSON via the EXISTING historyJson column
+    in both InMemoryWorkflowStore and SqlWorkflowStore. This deliberately
+    avoids repeating the HD-028 regression (a persisted-column addition
+    that changed row_to_instance's tuple shape from 6->7 and broke a test
+    file that had never been reviewed for the change). Adding new JSON keys
+    to an already-JSON column requires ZERO schema migration, ZERO change
+    to row_to_instance/build_insert_instance_params/build_update_instance_params
+    tuple shapes, and is fully backward compatible — old history entries
+    simply don't have these keys, and the derived getters below return
+    sensible defaults (empty dict / None) when they're absent.
+  - WorkflowInstance.get_fields() — scans history in order, merging every
+    entry's 'fields' dict (later entries win on key collision), giving a
+    single flattened "current known field values" view with no new state
+    to keep in sync.
+  - WorkflowInstance.get_expected_approver_upn() — scans history in
+    REVERSE, returning the most recent entry's 'expectedApproverUpn' if
+    present, else None.
+  - InMemoryWorkflowStore now also seeds HARDWARE_REQUEST (Section 4.1 of
+    the MVP Specification) alongside TEST/TEST_APPROVAL, so the full state
+    machine (including its list-form requiredRole transitions) is
+    offline-testable without a live SQL Database. The equivalent live-SQL
+    row is inserted via sql/seed_hardware_request_definition.sql (a manual,
+    one-time data seed — same precedent as schema_hd003_hd004.sql — since
+    workflow_definition rows are DATA, not application code, and this MVP
+    has no admin UI/endpoint for authoring them yet, per the permissions
+    matrix in the MVP Specification Section 3.2).
 """
 from __future__ import annotations
 import os
@@ -53,10 +70,10 @@ import uuid
 import datetime
 import logging
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any, Set
+from typing import Optional, List, Dict, Any, Set, Union
 
 
-def compute_terminal_states(states: List[str], transitions: List[Dict[str, str]]) -> List[str]:
+def compute_terminal_states(states: List[str], transitions: List[Dict[str, Any]]) -> List[str]:
     """A state is terminal if no transition has it as a 'from'. Shared by
     both InMemoryWorkflowStore's seeding and SqlWorkflowStore's row parsing
     (see sql_workflow_store.py), so the two backends can never disagree on
@@ -65,20 +82,34 @@ def compute_terminal_states(states: List[str], transitions: List[Dict[str, str]]
     return [s for s in states if s not in states_with_outgoing]
 
 
+def normalize_required_roles(required_role: Optional[Union[str, List[str]]]) -> List[str]:
+    """HD-026/031: a transition's 'requiredRole' may be a single string
+    (unchanged since HD-018, e.g. "Approver") OR a list of strings (new,
+    e.g. ["ITAgent", "ITAdmin"] for HARDWARE_REQUEST's ITApproval state,
+    which either role may action). This is the SINGLE place that flattens
+    either shape into a plain list — both roles_pending_from() below and
+    workflow_action_api.py's check_role_permission() call this, so the two
+    can never silently drift out of sync on what "requires role X" means
+    for a given transition. Returns an empty list for a role-free
+    transition (requiredRole absent or None)."""
+    if required_role is None:
+        return []
+    if isinstance(required_role, str):
+        return [required_role]
+    return list(required_role)
+
+
 @dataclass
 class WorkflowDefinition:
     workflow_def_id: str
     states: List[str]
-    transitions: List[Dict[str, str]]  # each: {"from", "to", "action", "requiredRole"?}
+    transitions: List[Dict[str, Any]]  # each: {"from", "to", "action", "requiredRole"?, "requiredFields"?, "resolveApprover"?, "onEnterEffects"?}
     terminal_states: List[str]
 
-    def get_transition(self, current_state: str, action: str) -> Optional[Dict[str, str]]:
-        """Returns the FULL transition dict (including 'requiredRole' if
-        present) for a given (current_state, action) pair, or None if
-        undefined. This is the only place transition lookup logic lives —
-        both next_state() and HD-018's role-checking logic go through this
-        single method, so there is exactly one source of truth for 'what
-        happens on this action from this state'."""
+    def get_transition(self, current_state: str, action: str) -> Optional[Dict[str, Any]]:
+        """Returns the FULL transition dict (including 'requiredRole',
+        'requiredFields', 'resolveApprover', 'onEnterEffects' if present)
+        for a given (current_state, action) pair, or None if undefined."""
         for t in self.transitions:
             if t["from"] == current_state and t["action"] == action:
                 return t
@@ -97,19 +128,18 @@ class WorkflowDefinition:
         return self.states[0]
 
     def roles_pending_from(self, current_state: str) -> List[str]:
-        """HD-029: returns the sorted, deduplicated list of 'requiredRole'
-        values on any transition whose 'from' equals current_state.
-        Transitions with no requiredRole (role-free, e.g. TEST's 'advance'
-        transitions, or HARDWARE_REQUEST's 'submit') never contribute a
-        role here — a role-free next step is not something any specific
-        role is 'awaiting', it just auto-advances. Returns an empty list
-        for a terminal state or a state with no role-gated outgoing
-        transitions, e.g. a state where you'd expect nobody's myApprovals
-        list to include this instance."""
+        """HD-029, extended HD-026/031 for list-form requiredRole: returns
+        the sorted, deduplicated list of every individual role that could
+        action a transition out of current_state. A transition whose
+        requiredRole is a list (e.g. ITApproval's ["ITAgent","ITAdmin"])
+        contributes BOTH roles individually — so an ITAgent's myApprovals
+        AND an ITAdmin's myApprovals both correctly include the same
+        pending instance, exactly matching HARDWARE_REQUEST's "ITAgent or
+        ITAdmin" design. Role-free transitions never contribute a role."""
         roles: Set[str] = set()
         for t in self.transitions:
-            if t["from"] == current_state and t.get("requiredRole"):
-                roles.add(t["requiredRole"])
+            if t["from"] == current_state:
+                roles.update(normalize_required_roles(t.get("requiredRole")))
         return sorted(roles)
 
 
@@ -123,15 +153,57 @@ class WorkflowInstance:
     updated_at: str = field(default_factory=lambda: datetime.datetime.utcnow().isoformat())
     requester_upn: Optional[str] = None  # HD-028: who started this instance, for myRequests
 
-    def record_transition(self, from_state: str, to_state: str, action: str) -> None:
-        self.history.append({
+    def record_transition(
+        self,
+        from_state: str,
+        to_state: str,
+        action: str,
+        fields: Optional[Dict[str, Any]] = None,
+        expected_approver_upn: Optional[str] = None,
+    ) -> None:
+        """HD-026/030/033: 'fields' and 'expected_approver_upn' are OPTIONAL
+        and embedded directly in this history entry — see this module's
+        docstring for why this is deliberately NOT a new persisted column.
+        Both default to None/absent for every pre-existing caller, so this
+        change is fully backward compatible with HD-015 through HD-029."""
+        entry: Dict[str, Any] = {
             "from": from_state,
             "to": to_state,
             "action": action,
             "at": datetime.datetime.utcnow().isoformat(),
-        })
+        }
+        if fields:
+            entry["fields"] = dict(fields)
+        if expected_approver_upn is not None:
+            entry["expectedApproverUpn"] = expected_approver_upn
+        self.history.append(entry)
         self.current_state = to_state
         self.updated_at = datetime.datetime.utcnow().isoformat()
+
+    def get_fields(self) -> Dict[str, Any]:
+        """HD-026/033: flattens every history entry's 'fields' dict, in
+        chronological order (later entries win on key collision — e.g. a
+        HARDWARE_REQUEST instance's 'itemDescription' captured at Submitted
+        remains available all the way through Fulfilled, while a
+        'serialNumber' captured later at AwaitingSerialCapture->Fulfilled
+        is added without disturbing the earlier key)."""
+        merged: Dict[str, Any] = {}
+        for entry in self.history:
+            if "fields" in entry:
+                merged.update(entry["fields"])
+        return merged
+
+    def get_expected_approver_upn(self) -> Optional[str]:
+        """HD-030: returns the most recently recorded expectedApproverUpn
+        (scanning history in reverse), or None if this instance has never
+        had one resolved — e.g. every existing TEST/TEST_APPROVAL instance,
+        or a HARDWARE_REQUEST instance where Graph manager resolution
+        wasn't yet available (HD-012 not yet provisioned) and gracefully
+        returned nothing."""
+        for entry in reversed(self.history):
+            if "expectedApproverUpn" in entry:
+                return entry["expectedApproverUpn"]
+        return None
 
 
 @dataclass
@@ -149,8 +221,7 @@ class ApprovalChainEntry:
 def compute_sla_breached(target_resolution_at) -> bool:
     """HD-007: pure, offline-testable function. An SLA is breached once
     the current UTC time has passed target_resolution_at. A None target
-    is never breached. Deliberately a LIVE computation, not a stored bit
-    a timer job must flip."""
+    is never breached."""
     if not target_resolution_at:
         return False
     target = target_resolution_at
@@ -183,6 +254,7 @@ class WorkflowStore:
     """Abstract interface. SqlWorkflowStore implements this exact same
     interface — the orchestrator and API endpoints depend only on this
     contract, never on a specific storage technology."""
+
     def get_definition(self, workflow_def_id: str) -> WorkflowDefinition:
         raise NotImplementedError
 
@@ -212,21 +284,16 @@ class WorkflowStore:
         raise NotImplementedError
 
     def get_instances_by_requester(self, requester_upn: str) -> List[WorkflowInstance]:
-        """HD-028. Returns all instances started by this requester_upn,
-        most-recently-created first."""
         raise NotImplementedError
 
     def get_instances_pending_role(self, role: str) -> List[WorkflowInstance]:
-        """HD-029. Returns all non-terminal instances whose current_state
-        has at least one outgoing transition requiring this role. See this
-        module's docstring for why this is a derived query rather than a
-        stored 'Pending' approval_chain row."""
         raise NotImplementedError
 
 
 class InMemoryWorkflowStore(WorkflowStore):
     """Original HD-015/HD-016 implementation. Data does not persist across
     Function App restarts. Safe fallback when Azure SQL is not configured."""
+
     def __init__(self):
         self._definitions: Dict[str, WorkflowDefinition] = {}
         self._instances: Dict[str, WorkflowInstance] = {}
@@ -234,6 +301,7 @@ class InMemoryWorkflowStore(WorkflowStore):
         self._sla_clocks: Dict[str, SlaClock] = {}
         self._seed_test_definition()
         self._seed_test_approval_definition()
+        self._seed_hardware_request_definition()
 
     def _seed_test_definition(self) -> None:
         states = ["Start", "Middle", "End"]
@@ -257,6 +325,66 @@ class InMemoryWorkflowStore(WorkflowStore):
         ]
         self._definitions["TEST_APPROVAL"] = WorkflowDefinition(
             workflow_def_id="TEST_APPROVAL",
+            states=states,
+            transitions=transitions,
+            terminal_states=compute_terminal_states(states, transitions),
+        )
+
+    def _seed_hardware_request_definition(self) -> None:
+        """HD-026: seeds HARDWARE_REQUEST exactly per MVP Specification
+        Section 4.1 — 7 states, role-gated approval chain (ManagerApproval
+        -> ITApproval -> Procurement), a hard AwaitingSerialCapture gate
+        (HD-033, enforced via requiredFields, not a fixed SLA), and a
+        Fulfilled-entry side effect that creates the resulting Hardware CI
+        (HD-034, enforced via onEnterEffects, interpreted generically by
+        workflow_effects_api.py — this module has zero knowledge of what
+        "createCi" actually does)."""
+        states = [
+            "Submitted", "ManagerApproval", "ITApproval", "Procurement",
+            "AwaitingSerialCapture", "Fulfilled", "Rejected",
+        ]
+        transitions = [
+            {
+                "from": "Submitted", "to": "ManagerApproval", "action": "advance",
+                "resolveApprover": "requesterManager",
+            },
+            {
+                "from": "ManagerApproval", "to": "ITApproval", "action": "approve",
+                "requiredRole": "Approver",
+            },
+            {
+                "from": "ManagerApproval", "to": "Rejected", "action": "reject",
+                "requiredRole": "Approver",
+            },
+            {
+                "from": "ITApproval", "to": "Procurement", "action": "approve",
+                "requiredRole": ["ITAgent", "ITAdmin"],
+            },
+            {
+                "from": "ITApproval", "to": "Rejected", "action": "reject",
+                "requiredRole": ["ITAgent", "ITAdmin"],
+            },
+            {
+                "from": "Procurement", "to": "AwaitingSerialCapture", "action": "markOrdered",
+                "requiredRole": "ITAdmin",
+            },
+            {
+                "from": "AwaitingSerialCapture", "to": "Fulfilled", "action": "captureSerial",
+                "requiredRole": "ITAdmin",
+                "requiredFields": ["serialNumber"],
+                "onEnterEffects": [
+                    {
+                        "type": "createCi",
+                        "ciClass": "Hardware",
+                        "relationshipType": "user has",
+                        "nameField": "itemDescription",
+                        "statusValue": "InService",
+                    }
+                ],
+            },
+        ]
+        self._definitions["HARDWARE_REQUEST"] = WorkflowDefinition(
+            workflow_def_id="HARDWARE_REQUEST",
             states=states,
             transitions=transitions,
             terminal_states=compute_terminal_states(states, transitions),
