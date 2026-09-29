@@ -12,6 +12,12 @@
     --card-bg: #ffffff;
     --text: #1f2937;
     --muted: #6b7280;
+    --danger: #b42318;
+    --danger-bg: #fef3f2;
+    --success: #22c55e;
+    --warn-bg: #fff8e6;
+    --warn-border: #f2c94c;
+    --border: #e5e7eb;
   }
   * { box-sizing: border-box; }
   body {
@@ -26,10 +32,12 @@
   header {
     background: var(--clg-blue);
     color: #fff;
-    padding: 1.25rem 2rem;
+    padding: 1rem 2rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.75rem;
   }
   header .brand {
     display: flex;
@@ -49,64 +57,203 @@
     font-weight: 700;
     font-size: 0.85rem;
   }
-  main {
-    flex: 1;
+  .session-bar {
     display: flex;
     align-items: center;
-    justify-content: center;
-    padding: 2rem;
+    gap: 0.5rem;
+    font-size: 0.8rem;
+    flex-wrap: wrap;
   }
+  .session-bar input, .session-bar select {
+    padding: 0.35rem 0.5rem;
+    border-radius: 6px;
+    border: none;
+    font-size: 0.8rem;
+  }
+  .session-bar label { opacity: 0.85; }
+  nav.tabs {
+    display: flex;
+    gap: 0.25rem;
+    background: #fff;
+    border-bottom: 1px solid var(--border);
+    padding: 0 2rem;
+    overflow-x: auto;
+  }
+  nav.tabs button {
+    border: none;
+    background: none;
+    padding: 0.9rem 1rem;
+    font-size: 0.9rem;
+    color: var(--muted);
+    cursor: pointer;
+    border-bottom: 3px solid transparent;
+    white-space: nowrap;
+  }
+  nav.tabs button.active {
+    color: var(--clg-blue);
+    font-weight: 600;
+    border-bottom-color: var(--clg-accent);
+  }
+  main {
+    flex: 1;
+    padding: 2rem;
+    max-width: 1000px;
+    width: 100%;
+    margin: 0 auto;
+  }
+  .view { display: none; }
+  .view.active { display: block; }
   .card {
     background: var(--card-bg);
     border-radius: 12px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.08);
-    padding: 2.5rem 3rem;
-    max-width: 640px;
-    width: 100%;
-    text-align: center;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+    padding: 1.75rem 2rem;
+    margin-bottom: 1.25rem;
   }
-  .card h1 {
-    font-size: 1.6rem;
-    margin-bottom: 0.5rem;
+  .card h2 {
+    font-size: 1.15rem;
     color: var(--clg-blue);
+    margin: 0 0 0.25rem 0;
   }
-  .card p.status {
-    color: var(--clg-accent);
-    font-weight: 600;
-    margin-bottom: 1.5rem;
-  }
-  .card p {
+  .card .subtitle {
     color: var(--muted);
-    line-height: 1.6;
+    font-size: 0.85rem;
+    margin-bottom: 1.25rem;
   }
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: 0.75rem;
-    margin-top: 1.75rem;
   }
   .tile {
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 0.9rem 0.5rem;
-    font-size: 0.85rem;
+    padding: 1.1rem 0.6rem;
+    font-size: 0.88rem;
     color: var(--muted);
     background: #fafbfc;
+    text-align: center;
+    cursor: default;
   }
-  .tile.disabled { opacity: 0.55; }
-  .dot {
+  .tile.enabled {
+    cursor: pointer;
+    color: #fff;
+    background: var(--clg-blue);
+    font-weight: 600;
+    border-color: var(--clg-blue);
+    transition: background 0.15s ease;
+  }
+  .tile.enabled:hover { background: #142c52; }
+  .tile.disabled { opacity: 0.5; }
+  label.field-label {
+    display: block;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text);
+    margin: 0.85rem 0 0.3rem 0;
+  }
+  input[type=text], textarea, select.form-select {
+    width: 100%;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-family: inherit;
+  }
+  textarea { resize: vertical; min-height: 70px; }
+  .btn {
     display: inline-block;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #22c55e;
-    margin-right: 6px;
+    padding: 0.55rem 1.1rem;
+    border-radius: 6px;
+    border: none;
+    font-size: 0.88rem;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 1rem;
   }
+  .btn-primary { background: var(--clg-blue); color: #fff; }
+  .btn-primary:hover { background: #142c52; }
+  .btn-approve { background: var(--success); color: #fff; }
+  .btn-reject { background: var(--danger); color: #fff; }
+  .btn-secondary { background: #eef1f5; color: var(--text); }
+  .btn-sm { padding: 0.35rem 0.7rem; font-size: 0.78rem; margin-top: 0; margin-right: 0.4rem; }
+  .error-box {
+    background: var(--danger-bg);
+    border: 1px solid #f3a29a;
+    color: var(--danger);
+    padding: 0.6rem 0.8rem;
+    border-radius: 6px;
+    font-size: 0.83rem;
+    margin-top: 0.75rem;
+  }
+  .success-box {
+    background: #ecfdf3;
+    border: 1px solid #86efac;
+    color: #15803d;
+    padding: 0.6rem 0.8rem;
+    border-radius: 6px;
+    font-size: 0.83rem;
+    margin-top: 0.75rem;
+  }
+  .empty-state {
+    text-align: center;
+    color: var(--muted);
+    padding: 2rem 1rem;
+    font-size: 0.88rem;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; }
+  .pill {
+    display: inline-block;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+  .pill-active { background: #dbeafe; color: #1e40af; }
+  .pill-terminal-good { background: #dcfce7; color: #15803d; }
+  .pill-terminal-bad { background: #fee2e2; color: #b42318; }
+  .detail-panel {
+    border-top: 1px solid var(--border);
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    font-size: 0.83rem;
+  }
+  .detail-panel .hist-row { padding: 0.35rem 0; border-bottom: 1px dashed var(--border); }
+  .action-panel {
+    background: #fafbfc;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.1rem;
+    margin-top: 0.6rem;
+  }
+  .field-hint { font-size: 0.78rem; color: var(--muted); margin-top: 0.2rem; }
+  .row-flex { display: flex; gap: 0.75rem; align-items: flex-end; flex-wrap: wrap; }
+  .row-flex > div { flex: 1; min-width: 160px; }
   footer {
     text-align: right;
     padding: 0.75rem 2rem;
     font-size: 0.75rem;
     color: var(--muted);
+  }
+  .scope-note {
+    font-size: 0.76rem;
+    color: var(--muted);
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-border);
+    border-radius: 6px;
+    padding: 0.5rem 0.7rem;
+    margin-bottom: 1rem;
+  }
+  .refresh-link {
+    font-size: 0.8rem;
+    color: var(--clg-accent);
+    cursor: pointer;
+    background: none;
+    border: none;
+    font-weight: 600;
+    padding: 0;
   }
 </style>
 </head>
@@ -117,30 +264,465 @@
     <div class="badge">CLG</div>
     <span>IT Helpdesk Portal</span>
   </div>
-  <span style="font-size:0.85rem; opacity:0.85;">MVP · Coming Soon</span>
+  <div class="session-bar">
+    <label>Acting as:</label>
+    <input type="text" id="sessionUpn" placeholder="your.upn@cognitionlearninggroup.com" style="width:230px;">
+    <label>Role:</label>
+    <select id="sessionRole">
+      <option value="Requester">Requester</option>
+      <option value="Approver">Approver</option>
+      <option value="ITAgent">IT Agent</option>
+      <option value="ITAdmin">IT Admin</option>
+      <option value="Executive">Executive</option>
+    </select>
+  </div>
 </header>
 
+<nav class="tabs">
+  <button class="tab-btn active" data-view="catalogue">Service Catalogue</button>
+  <button class="tab-btn" data-view="myRequests">My Requests</button>
+  <button class="tab-btn" data-view="myDevices">My Devices</button>
+  <button class="tab-btn" data-view="myApprovals">My Approvals</button>
+</nav>
+
 <main>
-  <div class="card">
-    <h1>IT Helpdesk Portal</h1>
-    <p class="status"><span class="dot"></span>API connected &mdash; frontend in development</p>
-    <p>
-      This portal will let you submit hardware requests, reset your Zoho MFA,
-      browse policies and certificates, and track requests in one place &mdash;
-      instead of emailing IT directly.
-    </p>
-    <div class="grid">
-      <div class="tile">Hardware Request</div>
-      <div class="tile disabled">My Devices</div>
-      <div class="tile disabled">Password / SSPR</div>
-      <div class="tile disabled">Policy Library</div>
-      <div class="tile disabled">Certificates</div>
-      <div class="tile disabled">Tender Pack</div>
+
+  <!-- HD-035: Service Catalogue -->
+  <div class="view active" id="view-catalogue">
+    <div class="card">
+      <h2>Service Catalogue</h2>
+      <p class="subtitle">Submit a request without emailing IT. Hardware Request is live — other categories are coming in later phases.</p>
+      <div class="grid">
+        <div class="tile enabled" id="tile-hardware">Hardware Request</div>
+        <div class="tile disabled">My Devices</div>
+        <div class="tile disabled">Password / SSPR</div>
+        <div class="tile disabled">Policy Library</div>
+        <div class="tile disabled">Certificates</div>
+        <div class="tile disabled">Tender Pack</div>
+      </div>
+    </div>
+
+    <!-- HD-036: Hardware Request submission form -->
+    <div class="card" id="hwRequestForm" style="display:none;">
+      <h2>New Hardware Request</h2>
+      <p class="subtitle">This creates a request that routes to your manager, then IT, before procurement.</p>
+      <label class="field-label">Item description</label>
+      <input type="text" id="hwItemDescription" placeholder="e.g. Dell Latitude 5450 laptop">
+      <label class="field-label">Justification (optional)</label>
+      <textarea id="hwJustification" placeholder="Why do you need this item?"></textarea>
+      <button class="btn btn-primary" id="hwSubmitBtn">Submit Request</button>
+      <div id="hwFormResult"></div>
     </div>
   </div>
+
+  <!-- HD-036 (tracking): My Requests -->
+  <div class="view" id="view-myRequests">
+    <div class="card">
+      <h2>My Requests</h2>
+      <p class="subtitle">Every request you've submitted, across every category, most recent first.
+        <button class="refresh-link" id="refreshMyRequests">Refresh</button>
+      </p>
+      <div id="myRequestsList"><div class="empty-state">Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- HD-037: My Devices -->
+  <div class="view" id="view-myDevices">
+    <div class="card">
+      <h2>My Devices</h2>
+      <p class="subtitle">Hardware currently assigned to you in the CMDB.
+        <button class="refresh-link" id="refreshMyDevices">Refresh</button>
+      </p>
+      <div id="myDevicesList"><div class="empty-state">Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- HD-038: My Approvals -->
+  <div class="view" id="view-myApprovals">
+    <div class="card">
+      <h2>My Approvals</h2>
+      <p class="subtitle">Every request currently awaiting a decision from your role.
+        <button class="refresh-link" id="refreshMyApprovals">Refresh</button>
+      </p>
+      <div class="scope-note">
+        MVP note: role and identity are self-declared above (top-right) for demonstration purposes —
+        this is not yet backed by a validated Entra ID token. Real access-control lands with Security
+        Hardening (HD-066).
+      </div>
+      <div id="myApprovalsList"><div class="empty-state">Loading…</div></div>
+    </div>
+  </div>
+
 </main>
 
 <footer>IT Helpdesk Portal — Cognition Learning Group</footer>
+
+<script>
+// ============================================================================
+// IT Helpdesk Portal — Frontend (HD-035/036/037/038, Batch E)
+// ============================================================================
+// Talks directly to the live it-helpdesk-api Function App endpoints shipped
+// in Batch A (CMDB reads) and Batch D (Hardware Request workflow). No build
+// step — single static HTML file, matching the existing it-helpdesk-web /
+// CLG dashboard pattern (Static Web App serving one index.html).
+//
+// *** MVP SCOPE NOTE — same caveat as every backend module's docstring ***
+// The "Acting as" UPN/Role fields in the header are a stand-in identity —
+// there is no real Entra ID sign-in yet (that's HD-012/HD-066). Every API
+// call below sends these as plain caller-supplied values (requesterUpn,
+// callerUpn, callerRole), exactly as the backend currently expects. This is
+// NOT a real access-control boundary — any user of this page can currently
+// declare themselves any role. Do not treat this UI as production-secure
+// until Security Hardening (HD-066) wires it to genuine identity.
+//
+// *** KNOWN MVP LIMITATION — itemDescription capture ***
+// POST /api/workflow/start does not accept a 'fields' payload (only
+// workflowDefId/requesterUpn — see workflow_api.py), and the very first
+// transition (Submitted -> ManagerApproval) is a SYSTEM auto-advance with
+// no human action call, so there is no backend-supported way to persist
+// the requester's freeform itemDescription at the moment of submission.
+// This frontend works around that with a client-side (localStorage) cache
+// of the description, attached automatically to whichever action THIS
+// BROWSER next performs against that instance. This is a reasonable,
+// explicitly-flagged MVP compromise for a single-operator test/demo
+// session; it does NOT persist across different browsers/devices acting
+// on later steps of the same request. A more complete fix (e.g. extending
+// POST /workflow/start to accept initial fields) is a candidate for a
+// future ticket, not implemented here without a corresponding backend
+// change and offline tests.
+// ============================================================================
+
+const API_BASE = "https://it-helpdesk-api-brc9bceyhebubuf8.uksouth-01.azurewebsites.net/api";
+const FUNCTION_KEY = "Tnb-20DOjiW32X3qUyLV4TxixuQejxDTGLVQ_ye1v4mSAzFuOP1ncQ==";
+const WORKFLOW_DEF_ID = "HARDWARE_REQUEST";
+
+// Static mirror of HARDWARE_REQUEST's transitions (MVP Specification Section
+// 4.1 / workflow_store.py's _seed_hardware_request_definition). This frontend
+// is deliberately scoped to ONE workflow category for MVP, so a small,
+// explicit lookup table here is simpler and clearer than trying to render a
+// fully generic transition UI from the raw workflow_definition JSON — Batch
+// E's acceptance criteria only cover Hardware Request, not a generic
+// workflow-definition-driven UI (that would be a much larger future ticket).
+const STATE_ACTIONS = {
+  ManagerApproval: [
+    { action: "approve", label: "Approve", role: "Approver", style: "btn-approve" },
+    { action: "reject", label: "Reject", role: "Approver", style: "btn-reject" },
+  ],
+  ITApproval: [
+    { action: "approve", label: "Approve", role: ["ITAgent", "ITAdmin"], style: "btn-approve" },
+    { action: "reject", label: "Reject", role: ["ITAgent", "ITAdmin"], style: "btn-reject" },
+  ],
+  Procurement: [
+    { action: "markOrdered", label: "Mark Ordered", role: "ITAdmin", style: "btn-secondary" },
+  ],
+  AwaitingSerialCapture: [
+    { action: "captureSerial", label: "Capture Serial & Fulfil", role: "ITAdmin", style: "btn-primary", requiresSerial: true },
+  ],
+};
+const TERMINAL_STATES = { Fulfilled: "good", Rejected: "bad" };
+
+function getSession() {
+  return {
+    upn: document.getElementById("sessionUpn").value.trim() || "unspecified@cognitionlearninggroup.com",
+    role: document.getElementById("sessionRole").value,
+  };
+}
+
+async function apiCall(path, options = {}) {
+  const url = `${API_BASE}${path}${path.includes("?") ? "&" : "?"}code=${FUNCTION_KEY}`;
+  const resp = await fetch(url, {
+    method: options.method || "GET",
+    headers: options.body ? { "Content-Type": "application/json" } : {},
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+  let body = null;
+  try { body = await resp.json(); } catch (e) { /* no body */ }
+  if (!resp.ok) {
+    const message = (body && body.message) ? body.message : `Request failed (HTTP ${resp.status}).`;
+    throw new Error(message);
+  }
+  return body;
+}
+
+function pillForState(state) {
+  if (TERMINAL_STATES[state] === "good") return `<span class="pill pill-terminal-good">${state}</span>`;
+  if (TERMINAL_STATES[state] === "bad") return `<span class="pill pill-terminal-bad">${state}</span>`;
+  return `<span class="pill pill-active">${state}</span>`;
+}
+
+function mergeFieldsFromHistory(history) {
+  // Mirrors WorkflowInstance.get_fields()'s merge logic client-side — the
+  // GET /api/workflow/instance/{id} response already includes the raw
+  // 'history' array (each entry optionally carrying a 'fields' sub-object,
+  // per workflow_store.py's record_transition), so no separate endpoint is
+  // needed to reconstruct "current known field values" for display.
+  const merged = {};
+  (history || []).forEach(entry => {
+    if (entry.fields) Object.assign(merged, entry.fields);
+  });
+  return merged;
+}
+
+function localDescriptionKey(instanceId) {
+  return `hdreq_pending_description_${instanceId}`;
+}
+
+// ----------------------------------------------------------------------------
+// Tab navigation
+// ----------------------------------------------------------------------------
+document.querySelectorAll(".tab-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById(`view-${btn.dataset.view}`).classList.add("active");
+    if (btn.dataset.view === "myRequests") loadMyRequests();
+    if (btn.dataset.view === "myDevices") loadMyDevices();
+    if (btn.dataset.view === "myApprovals") loadMyApprovals();
+  });
+});
+
+// ----------------------------------------------------------------------------
+// HD-035: Service Catalogue — only Hardware Request is enabled/clickable
+// ----------------------------------------------------------------------------
+document.getElementById("tile-hardware").addEventListener("click", () => {
+  const formEl = document.getElementById("hwRequestForm");
+  formEl.style.display = formEl.style.display === "none" ? "block" : "none";
+});
+
+// ----------------------------------------------------------------------------
+// HD-036: Submit Hardware Request
+// ----------------------------------------------------------------------------
+document.getElementById("hwSubmitBtn").addEventListener("click", async () => {
+  const resultEl = document.getElementById("hwFormResult");
+  resultEl.innerHTML = "";
+  const session = getSession();
+  const description = document.getElementById("hwItemDescription").value.trim();
+  if (!description) {
+    resultEl.innerHTML = `<div class="error-box">Please enter an item description before submitting.</div>`;
+    return;
+  }
+  try {
+    const started = await apiCall("/workflow/start", {
+      method: "POST",
+      body: { workflowDefId: WORKFLOW_DEF_ID, requesterUpn: session.upn },
+    });
+    // Known MVP limitation (see module docstring above): cache the
+    // description locally so it can ride along on the next action taken
+    // against this instance from this same browser.
+    localStorage.setItem(localDescriptionKey(started.instanceId), description);
+    resultEl.innerHTML = `
+      <div class="success-box">
+        Request submitted — instance <code>${started.instanceId}</code>, starting state
+        <strong>${started.currentState}</strong>. It will auto-advance to Manager Approval within a
+        few seconds. Track it under the "My Requests" tab.
+      </div>`;
+    document.getElementById("hwItemDescription").value = "";
+    document.getElementById("hwJustification").value = "";
+  } catch (e) {
+    resultEl.innerHTML = `<div class="error-box">${e.message}</div>`;
+  }
+});
+
+// ----------------------------------------------------------------------------
+// My Requests (HD-036 tracking) — GET /api/workflow/myRequests
+// ----------------------------------------------------------------------------
+async function loadMyRequests() {
+  const listEl = document.getElementById("myRequestsList");
+  listEl.innerHTML = `<div class="empty-state">Loading…</div>`;
+  const session = getSession();
+  try {
+    const data = await apiCall(`/workflow/myRequests?requesterUpn=${encodeURIComponent(session.upn)}`);
+    if (!data.instances.length) {
+      listEl.innerHTML = `<div class="empty-state">No requests yet for ${session.upn}. Submit one from the Service Catalogue tab.</div>`;
+      return;
+    }
+    listEl.innerHTML = `
+      <table>
+        <thead><tr><th>Workflow</th><th>State</th><th>Created</th><th></th></tr></thead>
+        <tbody>
+          ${data.instances.map(i => `
+            <tr>
+              <td>${i.workflowDefId}</td>
+              <td>${pillForState(i.currentState)}</td>
+              <td>${i.createdAt}</td>
+              <td><button class="btn btn-secondary btn-sm" onclick="toggleDetail('${i.instanceId}', 'req')">Details</button></td>
+            </tr>
+            <tr id="detail-req-${i.instanceId}" style="display:none;"><td colspan="4"><div class="detail-panel" id="detail-body-req-${i.instanceId}"></div></td></tr>
+          `).join("")}
+        </tbody>
+      </table>`;
+  } catch (e) {
+    listEl.innerHTML = `<div class="error-box">${e.message}</div>`;
+  }
+}
+document.getElementById("refreshMyRequests").addEventListener("click", loadMyRequests);
+
+// ----------------------------------------------------------------------------
+// My Devices (HD-037) — GET /api/cmdb/ci?class=Hardware&owner=
+// ----------------------------------------------------------------------------
+async function loadMyDevices() {
+  const listEl = document.getElementById("myDevicesList");
+  listEl.innerHTML = `<div class="empty-state">Loading…</div>`;
+  const session = getSession();
+  try {
+    const data = await apiCall(`/cmdb/ci?class=Hardware&owner=${encodeURIComponent(session.upn)}`);
+    if (!data.items.length) {
+      listEl.innerHTML = `<div class="empty-state">No Hardware CIs currently linked to ${session.upn}.</div>`;
+      return;
+    }
+    listEl.innerHTML = `
+      <table>
+        <thead><tr><th>Name</th><th>Status</th><th>Entity</th><th>Created</th></tr></thead>
+        <tbody>
+          ${data.items.map(ci => `
+            <tr>
+              <td>${ci.name}</td>
+              <td><span class="pill pill-terminal-good">${ci.status}</span></td>
+              <td>${ci.entity || "—"}</td>
+              <td>${ci.createdAt}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>`;
+  } catch (e) {
+    listEl.innerHTML = `<div class="error-box">${e.message}</div>`;
+  }
+}
+document.getElementById("refreshMyDevices").addEventListener("click", loadMyDevices);
+
+// ----------------------------------------------------------------------------
+// My Approvals (HD-038) — GET /api/workflow/myApprovals + POST /api/workflow/action
+// ----------------------------------------------------------------------------
+async function loadMyApprovals() {
+  const listEl = document.getElementById("myApprovalsList");
+  listEl.innerHTML = `<div class="empty-state">Loading…</div>`;
+  const session = getSession();
+  try {
+    const data = await apiCall(`/workflow/myApprovals?role=${encodeURIComponent(session.role)}`);
+    if (!data.instances.length) {
+      listEl.innerHTML = `<div class="empty-state">Nothing awaiting the ${session.role} role right now.</div>`;
+      return;
+    }
+    listEl.innerHTML = data.instances.map(i => `
+      <div class="card" style="margin-bottom:0.75rem; box-shadow:none; border:1px solid var(--border); padding:1rem 1.25rem;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+          <div>
+            <strong>${i.workflowDefId}</strong> — requested by ${i.requesterUpn || "unattributed"}
+            &nbsp;${pillForState(i.currentState)}
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="toggleDetail('${i.instanceId}', 'appr')">Details</button>
+        </div>
+        <div id="detail-appr-${i.instanceId}" style="display:none;">
+          <div class="detail-panel" id="detail-body-appr-${i.instanceId}"></div>
+        </div>
+        <div id="action-panel-${i.instanceId}"></div>
+      </div>
+    `).join("");
+    data.instances.forEach(i => renderActionPanel(i.instanceId, i.currentState, session));
+  } catch (e) {
+    listEl.innerHTML = `<div class="error-box">${e.message}</div>`;
+  }
+}
+document.getElementById("refreshMyApprovals").addEventListener("click", loadMyApprovals);
+
+function renderActionPanel(instanceId, currentState, session) {
+  const panelEl = document.getElementById(`action-panel-${instanceId}`);
+  const actions = STATE_ACTIONS[currentState];
+  if (!actions) { panelEl.innerHTML = ""; return; }
+  // Only show buttons the current session's declared role is actually
+  // permitted to use — mirrors check_role_permission's own normalize logic
+  // (a single role string or a list of acceptable roles).
+  const usable = actions.filter(a => {
+    const roles = Array.isArray(a.role) ? a.role : [a.role];
+    return roles.includes(session.role);
+  });
+  if (!usable.length) {
+    panelEl.innerHTML = `<p class="field-hint">Your declared role (${session.role}) cannot action this step. Switch role above to test as ${Array.isArray(actions[0].role) ? actions[0].role.join(" or ") : actions[0].role}.</p>`;
+    return;
+  }
+  const needsSerial = usable.some(a => a.requiresSerial);
+  panelEl.innerHTML = `
+    <div class="action-panel">
+      ${needsSerial ? `
+        <label class="field-label">Item description</label>
+        <input type="text" id="desc-${instanceId}" placeholder="e.g. Dell Latitude 5450 laptop" value="${localStorage.getItem(localDescriptionKey(instanceId)) || ""}">
+        <label class="field-label">Serial number <span style="color:var(--danger)">*required</span></label>
+        <input type="text" id="serial-${instanceId}" placeholder="e.g. SN-12345">
+        <p class="field-hint">Fulfilment is blocked until a non-blank serial number is captured (HD-033).</p>
+      ` : ""}
+      <div style="margin-top:0.75rem;">
+        ${usable.map(a => `<button class="btn ${a.style} btn-sm" onclick="performAction('${instanceId}', '${a.action}')">${a.label}</button>`).join("")}
+      </div>
+      <div id="action-result-${instanceId}"></div>
+    </div>`;
+}
+
+async function performAction(instanceId, action) {
+  const session = getSession();
+  const resultEl = document.getElementById(`action-result-${instanceId}`);
+  resultEl.innerHTML = "";
+  const fields = {};
+  const descInput = document.getElementById(`desc-${instanceId}`);
+  const serialInput = document.getElementById(`serial-${instanceId}`);
+  if (descInput && descInput.value.trim()) fields.itemDescription = descInput.value.trim();
+  if (serialInput) fields.serialNumber = serialInput.value.trim();
+  try {
+    const result = await apiCall("/workflow/action", {
+      method: "POST",
+      body: {
+        instanceId,
+        action,
+        callerRole: session.role,
+        callerUpn: session.upn,
+        fields,
+      },
+    });
+    let effectsMsg = "";
+    if (result.effects && result.effects.length) {
+      const ci = result.effects.find(e => e.effectType === "createCi");
+      if (ci && ci.ciId) effectsMsg = ` A new Hardware CI was created (${ci.ciId}) and linked to the requester.`;
+    }
+    resultEl.innerHTML = `<div class="success-box">Moved from ${result.previousState} to ${result.currentState}.${effectsMsg}</div>`;
+    if (result.currentState === "Fulfilled" || result.currentState === "Rejected") {
+      localStorage.removeItem(localDescriptionKey(instanceId));
+    }
+    setTimeout(loadMyApprovals, 1200);
+  } catch (e) {
+    resultEl.innerHTML = `<div class="error-box">${e.message}</div>`;
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Shared: expand/collapse instance detail (history + approval chain)
+// ----------------------------------------------------------------------------
+async function toggleDetail(instanceId, prefix) {
+  // "req" rows use a wrapping <tr> (table layout); "appr" rows use a plain
+  // <div> (card layout) — target whichever wrapper actually exists for
+  // this prefix rather than assuming a specific DOM shape.
+  const rowEl = document.getElementById(`detail-${prefix}-${instanceId}`);
+  const bodyEl = document.getElementById(`detail-body-${prefix}-${instanceId}`);
+  const target = rowEl || bodyEl.parentElement;
+  if (target.style.display !== "none") { target.style.display = "none"; return; }
+  target.style.display = "block";
+  bodyEl.innerHTML = "Loading…";
+  try {
+    const view = await apiCall(`/workflow/instance/${instanceId}`);
+    const fields = mergeFieldsFromHistory(view.history);
+    bodyEl.innerHTML = `
+      ${Object.keys(fields).length ? `<p><strong>Captured fields:</strong> ${Object.entries(fields).map(([k, v]) => `${k}=${v}`).join(", ")}</p>` : ""}
+      <p><strong>History:</strong></p>
+      ${view.history.map(h => `<div class="hist-row">${h.from} → ${h.to} (${h.action}) — ${h.at}</div>`).join("") || "<em>No transitions yet.</em>"}
+      ${view.approvalChain.length ? `<p style="margin-top:0.5rem;"><strong>Approval chain:</strong></p>${view.approvalChain.map(a => `<div class="hist-row">Step ${a.stepOrder}: ${a.status} by ${a.approverUpn || "unattributed"} — ${a.actionedAt}</div>`).join("")}` : ""}
+    `;
+  } catch (e) {
+    bodyEl.innerHTML = `<div class="error-box">${e.message}</div>`;
+  }
+}
+
+// Sensible default session so the page is immediately usable on first load.
+document.getElementById("sessionUpn").value = "chris.yuen@cognitionlearninggroup.com";
+</script>
 
 </body>
 </html>
