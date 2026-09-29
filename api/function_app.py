@@ -12,33 +12,27 @@ HD-019/020/021: GET /api/cmdb/ci/{ciId}, GET /api/cmdb/ci?class=&owner=,
   GET /api/cmdb/relationships?ciId=.
 HD-026/030/033/034: HARDWARE_REQUEST backend — requiredFields hard gate,
   dynamic approver resolution, generic onEnterEffects (createCi).
-HD-040 (this revision) — GET /api/identity/authMethods?upn=:
-  Thin HTTP trigger delegating to identity_api.py (request parsing/response
-  shaping) and graph_api.py (the actual Graph call, HD-030's sibling
-  function). Same "logic lives in its own module, HTTP trigger is just
-  plumbing" pattern as every route above. HD-039 (SSPR tile) and HD-041
-  (wizard UI) are frontend-only tickets built on top of this endpoint — see
-  web/index.html — and require no further backend changes.
-HD-045/046 (this revision) — Knowledge Base:
-  - GET /api/kb/search?query= — simple case-insensitive keyword match
-    against article title/body, delegating to kb_api.py + kb_store.py.
-    An unmatched query is a valid 200 with an empty results list, not an
-    error (HD-045's core acceptance criterion).
-  - POST /api/kb/feedback — records a Yes/No "was this helpful" response
-    against an article. Always inserts a NEW row, even for a repeated
-    submission from the same session — see kb_store.py's module docstring
-    for why this is deliberately append-only, not an upsert. HD-047's
-    search + feedback UI is frontend-only, built on top of these two
-    endpoints — see web/index.html.
+HD-040: GET /api/identity/authMethods?upn= — HD-039/041 (SSPR tile +
+  wizard) are frontend-only, built on top of this endpoint.
+HD-045/046: GET /api/kb/search?query=, POST /api/kb/feedback.
+HD-050/051 (this revision) — Policy & Compliance Hub:
+  - GET /api/compliance/policies — every Policy-type Document CI
+    (CLG_SEC_POL_001-006), joined with its version/approval/review-date
+    metadata via compliance_api.py + compliance_store.py.
+  - GET /api/compliance/certificates — every Certificate-type Document CI
+    (Cyber Essentials, Cyber Essentials Plus), with a LIVE-computed
+    days-remaining countdown (never stored — same design precedent as
+    HD-007's SlaClock.breached_flag). HD-052 (Policy Library viewer) and
+    HD-053 (certificate expiry cards) are frontend-only, built on top of
+    these two endpoints — see web/index.html.
+  Neither endpoint takes query parameters or requires request validation
+  — they simply list every Document CI of the relevant type — so, unlike
+  most routes in this file, there is no 400 error path for either.
 *** Scope note carried from every prior module's docstring — repeated here
-because it matters at the point where routes are wired up: 'callerRole'
-(HD-018), 'requesterUpn'/'role' (HD-028/029), CMDB reads (HD-019/020/021),
-and now 'upn' (HD-040) are all unauthenticated/caller-supplied for MVP
-demonstration purposes; Graph-based manager resolution (HD-030) and
-Graph-based auth-methods lookup (HD-040) are similarly best-effort until
-HD-012's Entra App Registration ships. None of this is yet a real
-access-control or identity boundary — that is Sprint 4's Security
-Hardening epic (HD-066). ***
+because it matters at the point where routes are wired up: every route in
+this file remains unauthenticated/caller-supplied for MVP demonstration
+purposes. This is not yet a real access-control or identity boundary —
+that is Sprint 4's Security Hardening epic (HD-066). ***
 """
 import json
 import logging
@@ -108,6 +102,8 @@ from kb_api import (
     FeedbackRequestValidationError,
     ArticleNotFoundError,
 )
+from compliance_store import get_compliance_store
+from compliance_api import build_policies_response, build_certificates_response
 
 app = df.DFApp(http_auth_level=func.AuthLevel.FUNCTION)
 
@@ -397,18 +393,6 @@ def cmdb_get_relationships(req: func.HttpRequest) -> func.HttpResponse:
 # ---------------------------------------------------------------------------
 @app.route(route="identity/authMethods", methods=["GET"])
 def identity_get_auth_methods(req: func.HttpRequest) -> func.HttpResponse:
-    """
-    Query string: ?upn=chris.yuen@cognitionlearninggroup.com
-    HTTP status mapping:
-    - 400: 'upn' query parameter missing or empty
-    - 200: ALWAYS returned for a syntactically valid request — even when
-      the underlying Graph call fails or HD-012 isn't provisioned yet, in
-      which case the response body's 'available' key is False with a
-      human-readable 'reason' (see identity_api.py's
-      build_auth_methods_response docstring for why this is a 200, not a
-      5xx: Graph unavailability is a normal, expected MVP-stage condition,
-      not a caller error).
-    """
     try:
         upn = parse_auth_methods_query(dict(req.params))
     except AuthMethodsValidationError as e:
@@ -431,14 +415,6 @@ def identity_get_auth_methods(req: func.HttpRequest) -> func.HttpResponse:
 # ---------------------------------------------------------------------------
 @app.route(route="kb/search", methods=["GET"])
 def kb_search(req: func.HttpRequest) -> func.HttpResponse:
-    """
-    Query string: ?query=password
-    HTTP status mapping:
-    - 400: 'query' query parameter missing or empty
-    - 200: returns { query, count, results: [...] }, possibly an empty
-      results list if no article matches — per HD-045's core acceptance
-      criterion, an unmatched query is a valid 200 response, not an error.
-    """
     try:
         query = parse_search_query(dict(req.params))
     except SearchValidationError as e:
@@ -462,15 +438,6 @@ def kb_search(req: func.HttpRequest) -> func.HttpResponse:
 # ---------------------------------------------------------------------------
 @app.route(route="kb/feedback", methods=["POST"])
 def kb_feedback(req: func.HttpRequest) -> func.HttpResponse:
-    """
-    Body: { "articleId": "...", "helpful": true, "sessionId": "..." (optional) }
-    HTTP status mapping:
-    - 400: request body missing/malformed, or 'articleId'/'helpful' invalid
-    - 404: articleId does not refer to a known article
-    - 200: feedback recorded — always as a NEW row, even for a repeated
-      submission from the same session (see kb_store.py's module docstring
-      for why this is deliberately append-only, not an upsert).
-    """
     try:
         parsed = parse_feedback_request(req.get_body())
     except FeedbackRequestValidationError as e:
@@ -489,6 +456,48 @@ def kb_feedback(req: func.HttpRequest) -> func.HttpResponse:
             status_code=404,
         )
     response_body = build_feedback_response(entry)
+    return func.HttpResponse(
+        json.dumps(response_body),
+        mimetype="application/json",
+        status_code=200,
+    )
+
+
+# ---------------------------------------------------------------------------
+# HD-050: GET /api/compliance/policies
+# ---------------------------------------------------------------------------
+@app.route(route="compliance/policies", methods=["GET"])
+def compliance_get_policies(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    No query parameters. Returns every Policy-type Document CI
+    (CLG_SEC_POL_001-006) with its version, approval status, and next
+    review date. Always 200 — an empty policies list (before seeding) is
+    a valid, non-error response.
+    """
+    cmdb_store = get_cmdb_store()
+    compliance_store = get_compliance_store()
+    response_body = build_policies_response(cmdb_store, compliance_store)
+    return func.HttpResponse(
+        json.dumps(response_body),
+        mimetype="application/json",
+        status_code=200,
+    )
+
+
+# ---------------------------------------------------------------------------
+# HD-051: GET /api/compliance/certificates
+# ---------------------------------------------------------------------------
+@app.route(route="compliance/certificates", methods=["GET"])
+def compliance_get_certificates(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    No query parameters. Returns every Certificate-type Document CI
+    (Cyber Essentials, Cyber Essentials Plus) with a LIVE-computed
+    daysRemaining (negative if already expired — see compliance_store.py's
+    compute_days_remaining docstring) and isExpired flag. Always 200.
+    """
+    cmdb_store = get_cmdb_store()
+    compliance_store = get_compliance_store()
+    response_body = build_certificates_response(cmdb_store, compliance_store)
     return func.HttpResponse(
         json.dumps(response_body),
         mimetype="application/json",
@@ -574,7 +583,7 @@ def advance_workflow_instance(instanceId: str) -> dict:
 @app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def health(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(
-        json.dumps({"status": "ok", "service": "it-helpdesk-api", "ticket": "HD-044-045-046"}),
+        json.dumps({"status": "ok", "service": "it-helpdesk-api", "ticket": "HD-048-049-050-051"}),
         mimetype="application/json",
         status_code=200,
     )
