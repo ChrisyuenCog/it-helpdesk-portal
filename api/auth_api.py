@@ -29,16 +29,20 @@ Object ID: 49cab434-8d81-44fd-b871-ecead72becdc
 Two layers, matching the MVP spec's "defence in depth" principle (Section
 3.3), adapted for a single-group model:
   1. Platform layer: Azure Function App "Easy Auth" (App Service
-     Authentication) is configured with the Azure AD provider and
-     "Require authentication" = On. This rejects any unauthenticated
-     caller before this code ever runs.
-  2. Application layer (this module): even though Easy Auth guarantees the
-     caller is *some* authenticated CLG user, it does NOT by itself
-     guarantee group membership unless Conditional Access/App Roles are
-     also configured. This module independently re-checks the caller's
-     group claim from the X-MS-CLIENT-PRINCIPAL header Easy Auth injects,
-     so a Function App misconfiguration at the Portal layer cannot
-     silently grant access to the whole of CLG.
+     Authentication) is Enabled with the Azure AD provider, but Restrict
+     access is set to "Allow unauthenticated access" (NOT "Require
+     authentication" — that setting was tried and reverted, because it
+     blocks ALL requests, including GET /api/health, at the platform
+     level before this code ever runs, with no per-route exception
+     possible). Easy Auth in this mode still validates and attaches
+     identity/group claims (X-MS-CLIENT-PRINCIPAL) whenever a caller DOES
+     present a valid token — it just no longer hard-blocks requests that
+     arrive with no token at all, leaving that decision to this module.
+  2. Application layer (this module): require_access_group() independently
+     checks the caller's group claim on every route except /api/health,
+     so a request with no token, an invalid token, or a valid token for a
+     non-member is uniformly rejected with a 403 from OUR code — not a
+     platform-level 401 that would also incorrectly catch /api/health.
 
 *** IT_HELPDESK_ADMIN_PIN STEP-UP (HD-067/068/069) ***
 Independent of group-gating above: Strictly Confidential Document CIs
@@ -52,8 +56,8 @@ this exact bug has recurred at least twice elsewhere at CLG.
 *** health ROUTE EXCEPTION ***
 GET /api/health intentionally stays on func.AuthLevel.ANONYMOUS and does
 NOT call require_access_group() — it is a liveness probe with no CLG data
-in its response body (see function_app.py), and gating it would break
-existing uptime/monitoring checks that call it unauthenticated.
+in its response body, and gating it would break existing uptime/monitoring
+checks that call it unauthenticated.
 """
 from __future__ import annotations
 
@@ -70,20 +74,26 @@ from typing import Optional, List
 try:
     import azure.functions as func  # type: ignore
 except ImportError:  # pragma: no cover - allows offline unit testing without the azure-functions package installed
-    func = None  # type: ignore
+    class _FakeHttpResponse:
+        """Minimal stand-in for func.HttpResponse, used only when the real
+        azure-functions package isn't installed (offline test environments).
+        Production always has the real package available."""
+        def __init__(self, body, mimetype=None, status_code=200):
+            self._body = body
+            self.mimetype = mimetype
+            self.status_code = status_code
+
+        def get_body(self):
+            return self._body.encode("utf-8") if isinstance(self._body, str) else self._body
+
+    class _FakeFuncModule:
+        HttpResponse = _FakeHttpResponse
+
+    func = _FakeFuncModule()  # type: ignore
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-# The Entra ID security group whose members are the ONLY users permitted to
-# reach any route in this portal. Set via Function App Application Setting
-# IT_HELPDESK_ACCESS_GROUP_ID.
-#
-# >>> CONFIRMED real value for CLG - IT and Digital Transformation: <<<
-#     49cab434-8d81-44fd-b871-ecead72becdc
-# Set this exact value as the IT_HELPDESK_ACCESS_GROUP_ID app setting — do
-# not hardcode it here, so the same code works unmodified in any future
-# environment (e.g. a test slot) that might gate on a different group.
 ACCESS_GROUP_SETTING_NAME = "IT_HELPDESK_ACCESS_GROUP_ID"
 
 PIN_SETTING_NAME = "IT_HELPDESK_ADMIN_PIN"
@@ -113,15 +123,6 @@ class CallerIdentity:
 # Easy Auth claim parsing
 # ---------------------------------------------------------------------------
 def _parse_client_principal(req: "func.HttpRequest") -> Optional[CallerIdentity]:
-    """
-    Azure App Service Authentication ("Easy Auth") injects a base64-encoded
-    JSON blob in the X-MS-CLIENT-PRINCIPAL header once "Require
-    authentication" is enabled on the Function App. Returns None if the
-    header is absent (e.g. local testing without Easy Auth) — callers must
-    decide how to treat that case; in production, Easy Auth's own "Require
-    authentication" setting means this should never actually be None for a
-    real request.
-    """
     header_value = req.headers.get("X-MS-CLIENT-PRINCIPAL")
     if not header_value:
         return None
@@ -141,9 +142,6 @@ def _parse_client_principal(req: "func.HttpRequest") -> Optional[CallerIdentity]
         claim_value = claim.get("val", "")
         if claim_type in ("name", "preferred_username", "upn"):
             user_name = user_name or claim_value
-        # Entra ID issues group membership as "groups" claims (or the full
-        # "http://schemas.microsoft.com/ws/2008/06/identity/claims/groups"
-        # URI, depending on token version/overage behaviour) — check both.
         if claim_type in ("groups", "http://schemas.microsoft.com/ws/2008/06/identity/claims/groups"):
             group_ids.append(claim_value)
 
@@ -151,19 +149,8 @@ def _parse_client_principal(req: "func.HttpRequest") -> Optional[CallerIdentity]
 
 
 def require_access_group(req: "func.HttpRequest") -> CallerIdentity:
-    """
-    HD-066 (adapted): call this at the top of EVERY route in function_app.py
-    (except the unauthenticated /api/health liveness probe).
-    Raises AccessDeniedError unless the caller's token contains the CLG -
-    IT and Digital Transformation group's Object ID
-    (49cab434-8d81-44fd-b871-ecead72becdc), read from the
-    IT_HELPDESK_ACCESS_GROUP_ID app setting.
-    """
     required_group_id = os.environ.get(ACCESS_GROUP_SETTING_NAME)
     if not required_group_id:
-        # Fail CLOSED, not open: if the app setting is missing, nobody
-        # gets access rather than everybody getting access. A misconfigured
-        # deployment must never silently become an open portal.
         logging.error(
             f"auth_api: {ACCESS_GROUP_SETTING_NAME} app setting is not configured — "
             f"denying all access until this is set."
@@ -189,8 +176,16 @@ def require_access_group(req: "func.HttpRequest") -> CallerIdentity:
 
 
 def build_access_denied_response(message: str) -> "func.HttpResponse":
+    """
+    IMPORTANT: shape matches workflow_api.py's build_error_response()
+    exactly ({"status": "error", "message": ...}), NOT a bespoke
+    {"error": ...} shape — the frontend's apiCall() helper in index.html
+    only ever reads body.message, so a mismatched shape here would have
+    silently fallen back to a generic "Request failed (HTTP 403)" message
+    instead of surfacing the real, more useful denial reason.
+    """
     return func.HttpResponse(
-        json.dumps({"error": message}),
+        json.dumps({"status": "error", "message": message}),
         mimetype="application/json",
         status_code=403,
     )
@@ -200,12 +195,6 @@ def build_access_denied_response(message: str) -> "func.HttpResponse":
 # HD-067/068 — PIN step-up for Strictly Confidential documents
 # ---------------------------------------------------------------------------
 def _pin_matches(submitted_pin: str, stored_pin: str) -> bool:
-    """
-    HD-068: proactively applies the whitespace-stripping fix already hit
-    twice elsewhere at CLG (CLG HR Dashboard's NOTES_ADMIN_PIN, IT Asset
-    Register's ASSET_REGISTER_ADMIN_PIN) — strip BOTH sides before an
-    exact, constant-time comparison.
-    """
     return hmac.compare_digest((submitted_pin or "").strip(), (stored_pin or "").strip())
 
 
@@ -215,11 +204,6 @@ def _sign_token(payload: str, secret: str) -> str:
 
 
 def verify_pin(submitted_pin: str) -> str:
-    """
-    HD-067: verifies the submitted PIN against IT_HELPDESK_ADMIN_PIN and,
-    on success, returns a signed, stateless session token good for 8 hours.
-    Raises PinVerificationError on an incorrect PIN or missing configuration.
-    """
     stored_pin = os.environ.get(PIN_SETTING_NAME)
     token_secret = os.environ.get(TOKEN_SECRET_SETTING_NAME)
     if not stored_pin or not token_secret:
@@ -234,10 +218,6 @@ def verify_pin(submitted_pin: str) -> str:
 
 
 def validate_pin_session_token(token: Optional[str]) -> bool:
-    """
-    HD-069: validates a previously-issued PIN session token. Returns True
-    only if the signature is valid AND the token has not expired.
-    """
     token_secret = os.environ.get(TOKEN_SECRET_SETTING_NAME)
     if not token_secret or not token:
         return False
