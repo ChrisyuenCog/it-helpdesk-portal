@@ -34,11 +34,32 @@
 <p id="msg" style="font-family:system-ui,sans-serif;font-size:14px;color:#555;padding:16px;">Signing you in…</p>
 <script src="msal-redirect-bridge.js"></script>
 <script>
-  window.msalBroadcastResponseToMainFrame().catch(function (err) {
-    console.error("MSAL redirect bridge failed:", err);
+  // Snapshot what arrived BEFORE the bridge runs (it clears the URL).
+  // Only presence flags are recorded, never the auth code itself.
+  var arrived = {
+    hash: location.hash.length > 1,
+    query: location.search.length > 1,
+    state: /[#?&]state=/.test(location.hash + location.search),
+    error: (new URLSearchParams(location.hash.slice(1) + "&" + location.search.slice(1))).get("error"),
+    opener: !!window.opener
+  };
+  if (typeof window.msalBroadcastResponseToMainFrame !== "function") {
     document.getElementById("msg").textContent =
-      "Sign-in could not be completed. Close this window and try again.";
-  });
+      "Sign-in could not be completed: the sign-in helper script did not load. Close this window and try again.";
+  } else {
+    window.msalBroadcastResponseToMainFrame().catch(function (err) {
+      console.error("MSAL redirect bridge failed:", err, arrived);
+      document.getElementById("msg").innerHTML =
+        "Sign-in could not be completed. Close this window and try again.<br><br>" +
+        "<small style='color:#888'>Details for IT: " +
+        String((err && (err.errorCode || err.name)) || err).replace(/</g, "&lt;") +
+        (err && err.subError ? " / " + String(err.subError).replace(/</g, "&lt;") : "") +
+        " · hash=" + arrived.hash + " query=" + arrived.query +
+        " state=" + arrived.state + " opener=" + arrived.opener +
+        (arrived.error ? " · aad_error=" + String(arrived.error).replace(/</g, "&lt;") : "") +
+        "</small>";
+    });
+  }
 </script>
 </body>
 </html>
