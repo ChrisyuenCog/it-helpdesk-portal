@@ -6,33 +6,39 @@
 </head>
 <body>
 <!--
-  HD-066/069 (Batch K) — dedicated, intentionally empty MSAL popup
-  redirect target.
+  MSAL popup / silent-iframe redirect target.
 
-  *** WHY THIS FILE EXISTS (root cause of popup_window_error) ***
-  MSAL.js's loginPopup()/acquireTokenPopup() flow works by: (1) opening a
-  popup, (2) navigating it to Microsoft's login page, (3) Microsoft
-  redirecting the popup back to the configured redirectUri, (4) MSAL's
-  OWN internal monitor — running in the OPENER window, polling the
-  popup's URL — detects the auth response and closes the popup itself.
-  Step 4 does NOT require any JS to run inside the popup at all.
+  *** WHY THE PREVIOUS (EMPTY) VERSION OF THIS PAGE CAUSED "timed_out" ***
+  The earlier version of this file was deliberately empty, based on how
+  MSAL.js v2/v3 worked: the opener window polled the popup's URL and
+  closed it itself. index.html now loads msal-browser v5.23.0, and MSAL v5
+  NO LONGER POLLS THE POPUP. Instead the opener listens on a
+  BroadcastChannel and waits for the redirect page to post the auth
+  response back. An empty page never posts anything, so after the popup
+  bridge timeout MSAL rejects with BrowserAuthError "timed_out"
+  (internal reason "redirect_bridge_timeout") — exactly the error shown
+  on the Policy & Compliance tab. COOP headers were never the cause;
+  BroadcastChannel works regardless of Cross-Origin-Opener-Policy.
 
-  The bug this fixes: redirectUri was set to window.location.origin (the
-  full IT Helpdesk Portal SPA). So in step 3, the popup fully loaded and
-  executed the ENTIRE app a second time, including its own
-  msalInstance.handleRedirectPromise() call — which raced against (and
-  broke) MSAL's own internal opener-side popup-monitor logic, surfacing
-  as a direct popup_window_error thrown by MSAL itself.
+  The fix: this page loads MSAL's official redirect bridge and calls
+  broadcastResponseToMainFrame(), which reads the auth code from the URL,
+  broadcasts it to the main app, and closes the popup (or ends the
+  hidden iframe used by acquireTokenSilent). It still contains no app
+  logic and never calls handleRedirectPromise(), so the original
+  popup_window_error race this page was created to avoid does not return.
 
-  The fix: give the popup flow a completely separate, essentially empty
-  redirect target (this file) instead of the main app URL. With nothing
-  here to process the hash, MSAL's own internal opener-side monitor reads
-  and closes it automatically, and the popup is visually just a brief
-  blank flash (if the user has an existing Microsoft SSO session, this
-  resolves near-instantly).
-
-  This file deliberately contains no MSAL library reference and no
-  application logic — that is correct and intentional, not an oversight.
+  The bridge is self-hosted (msal-redirect-bridge.js, same folder) rather
+  than loaded from a CDN, so sign-in has no third-party dependency here.
+  Its version must match the msal-browser version imported in index.html.
 -->
+<p id="msg" style="font-family:system-ui,sans-serif;font-size:14px;color:#555;padding:16px;">Signing you in…</p>
+<script src="msal-redirect-bridge.js"></script>
+<script>
+  window.msalBroadcastResponseToMainFrame().catch(function (err) {
+    console.error("MSAL redirect bridge failed:", err);
+    document.getElementById("msg").textContent =
+      "Sign-in could not be completed. Close this window and try again.";
+  });
+</script>
 </body>
 </html>

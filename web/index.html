@@ -541,7 +541,11 @@ async function getMsalInstance() {
     auth: {
       clientId: MSAL_CLIENT_ID,
       authority: `https://login.microsoftonline.com/${MSAL_TENANT_ID}`,
-      redirectUri: window.location.origin, // used only by initialize()/silent flow at app load — NOT the popup flow, see POPUP_REDIRECT_URI above
+      // MSAL v5: popup AND silent-iframe flows both need a redirect page that
+      // runs the redirect bridge (auth-popup.html). Pointing the default at the
+      // app root would make silent token renewal time out the same way the
+      // popup did, because the app itself never broadcasts the response.
+      redirectUri: POPUP_REDIRECT_URI,
     },
     cache: { cacheLocation: "sessionStorage" },
   });
