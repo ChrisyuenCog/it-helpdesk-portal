@@ -276,7 +276,7 @@
     <span>IT Helpdesk Portal</span>
   </div>
   <div class="session-bar">
-    <span id="signedInIndicator" style="font-size:0.8rem;opacity:0.9;margin-right:0.75rem;">Signing in…</span>
+    <span id="signedInIndicator" style="font-size:0.8rem;opacity:0.9;margin-right:0.75rem;">Checking sign-in…</span>
     <label>Acting as:</label>
     <input type="text" id="sessionUpn" placeholder="your.upn@cognitionlearninggroup.com" style="width:230px;">
     <label>Role:</label>
@@ -433,18 +433,14 @@
      design (confirmed live: HTTP 404, X-Ms-Error-Code: WebContentNotFound).
      Current (v5.x) msal-browser's officially documented/guaranteed CDN
      consumption path (via jsDelivr, serving the real npm package) is an
-     ESM import, NOT a classic-script global-variable build — unlike the
-     old deprecated v2 CDN, there is no reliably-documented UMD/global
-     "lib/msal-browser.min.js" file to point a plain <script src> at for
-     v5.x. This small type="module" shim below imports the real package via
-     jsDelivr's documented +esm endpoint and republishes it as
-     window.msal.PublicClientApplication, so the rest of this file's
-     EXISTING code (which uses the classic "msal.PublicClientApplication"
-     global, needed because this file also has several inline onclick="..."
-     handlers that require true global scope and can't live inside a
-     module) keeps working unchanged. window.msalReadyPromise lets the
-     classic script safely await the async network-loaded import instead
-     of assuming any particular script-execution order. -->
+     ESM import, NOT a classic-script global-variable build. This small
+     type="module" shim imports the real package via jsDelivr's documented
+     +esm endpoint and republishes it as window.msal.PublicClientApplication,
+     so the rest of this file's EXISTING code (which uses the classic
+     "msal.PublicClientApplication" global, needed because this file also
+     has several inline onclick="..." handlers requiring true global scope)
+     keeps working unchanged. window.msalReadyPromise lets the classic
+     script safely await the async network-loaded import. -->
 <script type="module">
   window.msalReadyPromise = import('https://cdn.jsdelivr.net/npm/@azure/msal-browser@5.23.0/+esm')
     .then(mod => { window.msal = { PublicClientApplication: mod.PublicClientApplication }; })
@@ -517,15 +513,22 @@ const MSAL_CLIENT_ID = "0b3f61af-492a-4da6-9790-720d2f39443c"; // it-helpdesk-we
 const MSAL_TENANT_ID = "03233b9e-777e-4e0e-9ed1-92b5317c5020"; // Cognition Education Ltd
 const API_SCOPE = "api://f6d7542f-fbe3-4de7-9f81-a8e6f4cbf8d2/user_impersonation"; // it-helpdesk-api
 
-// Lazy instance creation (NOT top-level/immediate): the classic script
-// below runs synchronously as soon as the parser reaches it, but the real
-// msal.PublicClientApplication constructor only becomes available once the
-// type="module" shim's async ESM import (jsDelivr network fetch) resolves.
-// Every entry point below awaits window.msalReadyPromise first rather than
-// assuming any particular script-execution order relative to the module.
 let msalInstance = null;
 let msalInitialized = false;
 let signedInAccount = null;
+// *** CONCURRENCY GUARDS — why these exist ***
+// This frontend fires loadCertificates() and loadPolicies() (and in general,
+// several API calls) in parallel, not sequentially, whenever a tab is
+// clicked. Each independently calls apiCall() -> getApiAccessToken(), and
+// without serialization, two near-simultaneous calls into MSAL's
+// loginPopup()/acquireTokenSilent() race on the SAME sessionStorage token
+// cache and throw "no_token_request_cache_error" (confirmed live during
+// testing). The fix is the standard MSAL.js guidance: ensure only ONE
+// sign-in/token-acquisition operation is ever in flight at a time, and let
+// every concurrent caller share that single in-flight Promise rather than
+// each starting their own.
+let pendingSignInPromise = null;
+let pendingTokenPromise = null;
 
 async function getMsalInstance() {
   if (msalInstance) return msalInstance;
@@ -548,18 +551,20 @@ async function ensureMsalReady() {
   const instance = await getMsalInstance();
   if (!msalInitialized) {
     await instance.initialize();
-    // Completes any pending redirect-based sign-in (not used by the popup
-    // flow below today, but harmless/required by MSAL.js's lifecycle either way).
     await instance.handleRedirectPromise();
     msalInitialized = true;
   }
   return instance;
 }
 
-// Signs the user in (popup) if not already signed in this browser session,
-// and returns the active account. Called once on page load and lazily again
-// if a later silent token acquisition fails (e.g. session expired).
-async function ensureSignedIn() {
+// Silent-only check: does NOT open an interactive popup. Safe to call
+// automatically on page load, since browsers routinely block popups that
+// aren't triggered by a direct user gesture (click) — an earlier revision
+// of this file called an interactive loginPopup() automatically on page
+// load and it failed/blocked silently for exactly that reason. This
+// function only inspects MSAL's existing cached accounts (if the user
+// already has a live SSO session with Entra ID in this browser).
+async function trySilentAccountLookup() {
   const instance = await ensureMsalReady();
   const existingAccounts = instance.getAllAccounts();
   if (existingAccounts.length > 0) {
@@ -567,30 +572,58 @@ async function ensureSignedIn() {
     instance.setActiveAccount(signedInAccount);
     return signedInAccount;
   }
-  const loginResult = await instance.loginPopup({ scopes: [API_SCOPE] });
-  signedInAccount = loginResult.account;
-  instance.setActiveAccount(signedInAccount);
-  return signedInAccount;
+  return null;
 }
 
-// Returns a valid access token for it-helpdesk-api, acquiring one silently
-// when possible and falling back to an interactive popup only if the
-// silent attempt fails (e.g. no cached session yet, or it has expired).
-async function getApiAccessToken() {
-  const instance = await ensureMsalReady();
-  if (!signedInAccount) {
-    await ensureSignedIn();
-  }
+// Interactive sign-in (popup) — only ever called from within a real user
+// gesture's call chain (a tab-click handler calling apiCall(), ultimately),
+// never automatically on page load. Concurrent callers share one in-flight
+// Promise via pendingSignInPromise rather than each opening their own popup.
+async function ensureSignedIn() {
+  if (pendingSignInPromise) return pendingSignInPromise;
+  pendingSignInPromise = (async () => {
+    const instance = await ensureMsalReady();
+    const existing = await trySilentAccountLookup();
+    if (existing) return existing;
+    const loginResult = await instance.loginPopup({ scopes: [API_SCOPE] });
+    signedInAccount = loginResult.account;
+    instance.setActiveAccount(signedInAccount);
+    return signedInAccount;
+  })();
   try {
-    const result = await instance.acquireTokenSilent({
-      scopes: [API_SCOPE],
-      account: signedInAccount,
-    });
-    return result.accessToken;
-  } catch (silentError) {
-    const result = await instance.acquireTokenPopup({ scopes: [API_SCOPE] });
-    signedInAccount = result.account;
-    return result.accessToken;
+    return await pendingSignInPromise;
+  } finally {
+    pendingSignInPromise = null;
+  }
+}
+
+// Returns a valid access token for it-helpdesk-api. Concurrent callers
+// (e.g. loadCertificates() + loadPolicies() firing together) share one
+// in-flight Promise via pendingTokenPromise, preventing the MSAL cache race
+// condition described above.
+async function getApiAccessToken() {
+  if (pendingTokenPromise) return pendingTokenPromise;
+  pendingTokenPromise = (async () => {
+    const instance = await ensureMsalReady();
+    if (!signedInAccount) {
+      await ensureSignedIn();
+    }
+    try {
+      const result = await instance.acquireTokenSilent({
+        scopes: [API_SCOPE],
+        account: signedInAccount,
+      });
+      return result.accessToken;
+    } catch (silentError) {
+      const result = await instance.acquireTokenPopup({ scopes: [API_SCOPE] });
+      signedInAccount = result.account;
+      return result.accessToken;
+    }
+  })();
+  try {
+    return await pendingTokenPromise;
+  } finally {
+    pendingTokenPromise = null;
   }
 }
 
@@ -631,9 +664,8 @@ async function apiCall(path, options = {}) {
   // HD-066/069: attach a real Azure AD access token for it-helpdesk-api on
   // every call, so auth_api.py's require_access_group() can see genuine
   // group-membership claims. The pre-existing ?code=FUNCTION_KEY query
-  // param stays — it satisfies the Function App's own route-level
-  // AuthLevel.FUNCTION requirement (unrelated to, and layered underneath,
-  // the group-membership check this Bearer token enables).
+  // param stays — it satisfies a separate, lower-level Function App route
+  // requirement, unrelated to this Bearer token.
   let accessToken;
   try {
     accessToken = await getApiAccessToken();
@@ -1136,18 +1168,41 @@ async function toggleDetail(instanceId, prefix) {
 // Sensible default session so the page is immediately usable on first load.
 document.getElementById("sessionUpn").value = "chris.yuen@cognitionlearninggroup.com";
 
-// HD-066/069: sign in on page load so getApiAccessToken() can resolve
-// silently for every subsequent tab click / API call, rather than
-// interrupting the user with a popup the first time they click a tab.
-(async function bootstrapSignIn() {
+// HD-066/069: on page load, only check SILENTLY for an existing cached
+// Entra ID session — do NOT trigger an interactive loginPopup() here.
+// Browsers routinely block popups that aren't triggered by a direct user
+// gesture (click), so an automatic popup on page load is unreliable (this
+// was tried and confirmed broken during testing). The real interactive
+// sign-in, if needed, happens lazily the first time the user clicks a tab
+// that calls apiCall() -> getApiAccessToken() -> ensureSignedIn() — which
+// IS a genuine user gesture and reliably allowed to open a popup.
+(async function bootstrapSignInCheck() {
   const indicator = document.getElementById("signedInIndicator");
   try {
-    const account = await ensureSignedIn();
-    indicator.textContent = `Signed in: ${account.username}`;
+    const account = await trySilentAccountLookup();
+    indicator.textContent = account
+      ? `Signed in: ${account.username}`
+      : "Not signed in — click any tab to sign in";
   } catch (e) {
-    indicator.textContent = "Sign-in failed — API calls will be blocked until you reload and sign in.";
+    console.error("MSAL silent account lookup failed:", e);
+    indicator.textContent = "Sign-in check failed — click any tab to sign in";
     indicator.style.color = "#ffd7d2";
   }
+})();
+
+// Once a real interactive sign-in completes (triggered lazily by the first
+// tab click that calls apiCall()), update the header indicator to reflect
+// it, rather than leaving it stuck on "Not signed in" even after the user
+// has actually signed in successfully.
+(function wireSignInIndicatorUpdates() {
+  const indicator = document.getElementById("signedInIndicator");
+  const poll = setInterval(() => {
+    if (signedInAccount) {
+      indicator.textContent = `Signed in: ${signedInAccount.username}`;
+      indicator.style.color = "";
+      clearInterval(poll);
+    }
+  }, 500);
 })();
 </script>
 
