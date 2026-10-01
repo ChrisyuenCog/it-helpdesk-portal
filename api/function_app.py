@@ -28,11 +28,24 @@ HD-050/051 (this revision) — Policy & Compliance Hub:
   Neither endpoint takes query parameters or requires request validation
   — they simply list every Document CI of the relevant type — so, unlike
   most routes in this file, there is no 400 error path for either.
-*** Scope note carried from every prior module's docstring — repeated here
-because it matters at the point where routes are wired up: every route in
-this file remains unauthenticated/caller-supplied for MVP demonstration
-purposes. This is not yet a real access-control or identity boundary —
-that is Sprint 4's Security Hardening epic (HD-066). ***
+HD-066/067/068/069 (Batch K, brought forward) — Security Hardening:
+*** SUPERSEDES the scope note previously here. *** Every route below (one
+exception: GET /api/health) now calls auth_api.require_access_group() as
+its first action, restricting the ENTIRE portal to members of the CLG -
+IT and Digital Transformation Entra ID security group (Object ID
+49cab434-8d81-44fd-b871-ecead72becdc) — not the wider 5-role model the
+original MVP Specification described (see auth_api.py's module docstring
+for the full rationale). A new POST /api/compliance/verifyPin endpoint
+(HD-067) issues a short-lived signed session token for stepping up to
+view Strictly Confidential documents (HD-069) in the Policy & Compliance
+Hub; GET /api/compliance/policies and GET /api/compliance/certificates
+now also read an optional X-Pin-Session-Token request header and pass its
+validity through to compliance_api.py so Strictly Confidential rows are
+redacted unless that step-up has been completed. GET /api/health remains
+on func.AuthLevel.ANONYMOUS and deliberately skips the group check — it
+is a liveness probe with no CLG data in its response body, and gating it
+would break existing uptime/monitoring checks that call it
+unauthenticated.
 """
 import json
 import logging
@@ -104,6 +117,15 @@ from kb_api import (
 )
 from compliance_store import get_compliance_store
 from compliance_api import build_policies_response, build_certificates_response
+from auth_api import (
+    require_access_group,
+    build_access_denied_response,
+    AccessDeniedError,
+    verify_pin,
+    PinVerificationError,
+    validate_pin_session_token,
+    get_pin_session_token_from_request,
+)
 
 app = df.DFApp(http_auth_level=func.AuthLevel.FUNCTION)
 
@@ -114,6 +136,10 @@ app = df.DFApp(http_auth_level=func.AuthLevel.FUNCTION)
 @app.route(route="workflow/start", methods=["POST"])
 @app.durable_client_input(client_name="client")
 async def workflow_start(req: func.HttpRequest, client) -> func.HttpResponse:
+    try:
+        require_access_group(req)
+    except AccessDeniedError as e:
+        return build_access_denied_response(str(e))
     try:
         parsed = parse_start_request(req.get_body())
     except StartRequestValidationError as e:
@@ -168,6 +194,10 @@ async def workflow_start(req: func.HttpRequest, client) -> func.HttpResponse:
 # ---------------------------------------------------------------------------
 @app.route(route="workflow/action", methods=["POST"])
 def workflow_action(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        require_access_group(req)
+    except AccessDeniedError as e:
+        return build_access_denied_response(str(e))
     try:
         parsed = parse_action_request(req.get_body())
     except ActionRequestValidationError as e:
@@ -258,6 +288,10 @@ def workflow_action(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="workflow/instance/{instanceId}", methods=["GET"])
 def workflow_get_instance(req: func.HttpRequest) -> func.HttpResponse:
     try:
+        require_access_group(req)
+    except AccessDeniedError as e:
+        return build_access_denied_response(str(e))
+    try:
         instance_id = parse_instance_id(req.route_params.get("instanceId"))
     except InstanceNotFoundError as e:
         return func.HttpResponse(
@@ -287,6 +321,10 @@ def workflow_get_instance(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="workflow/myRequests", methods=["GET"])
 def workflow_my_requests(req: func.HttpRequest) -> func.HttpResponse:
     try:
+        require_access_group(req)
+    except AccessDeniedError as e:
+        return build_access_denied_response(str(e))
+    try:
         requester_upn = parse_my_requests_query(dict(req.params))
     except MyRequestsValidationError as e:
         return func.HttpResponse(
@@ -310,6 +348,10 @@ def workflow_my_requests(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="workflow/myApprovals", methods=["GET"])
 def workflow_my_approvals(req: func.HttpRequest) -> func.HttpResponse:
     try:
+        require_access_group(req)
+    except AccessDeniedError as e:
+        return build_access_denied_response(str(e))
+    try:
         role = parse_my_approvals_query(dict(req.params))
     except MyApprovalsValidationError as e:
         return func.HttpResponse(
@@ -332,6 +374,10 @@ def workflow_my_approvals(req: func.HttpRequest) -> func.HttpResponse:
 # ---------------------------------------------------------------------------
 @app.route(route="cmdb/ci/{ciId}", methods=["GET"])
 def cmdb_get_ci(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        require_access_group(req)
+    except AccessDeniedError as e:
+        return build_access_denied_response(str(e))
     store = get_cmdb_store()
     try:
         ci_id = parse_ci_id(req.route_params.get("ciId"))
@@ -354,6 +400,10 @@ def cmdb_get_ci(req: func.HttpRequest) -> func.HttpResponse:
 # ---------------------------------------------------------------------------
 @app.route(route="cmdb/ci", methods=["GET"])
 def cmdb_list_ci(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        require_access_group(req)
+    except AccessDeniedError as e:
+        return build_access_denied_response(str(e))
     store = get_cmdb_store()
     filters = parse_list_ci_query(dict(req.params))
     cis = store.list_ci(ci_class=filters["ci_class"], owner=filters["owner"])
@@ -370,6 +420,10 @@ def cmdb_list_ci(req: func.HttpRequest) -> func.HttpResponse:
 # ---------------------------------------------------------------------------
 @app.route(route="cmdb/relationships", methods=["GET"])
 def cmdb_get_relationships(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        require_access_group(req)
+    except AccessDeniedError as e:
+        return build_access_denied_response(str(e))
     try:
         ci_id = parse_relationships_query(dict(req.params))
     except RelationshipsValidationError as e:
@@ -394,6 +448,10 @@ def cmdb_get_relationships(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="identity/authMethods", methods=["GET"])
 def identity_get_auth_methods(req: func.HttpRequest) -> func.HttpResponse:
     try:
+        require_access_group(req)
+    except AccessDeniedError as e:
+        return build_access_denied_response(str(e))
+    try:
         upn = parse_auth_methods_query(dict(req.params))
     except AuthMethodsValidationError as e:
         return func.HttpResponse(
@@ -415,6 +473,10 @@ def identity_get_auth_methods(req: func.HttpRequest) -> func.HttpResponse:
 # ---------------------------------------------------------------------------
 @app.route(route="kb/search", methods=["GET"])
 def kb_search(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        require_access_group(req)
+    except AccessDeniedError as e:
+        return build_access_denied_response(str(e))
     try:
         query = parse_search_query(dict(req.params))
     except SearchValidationError as e:
@@ -438,6 +500,10 @@ def kb_search(req: func.HttpRequest) -> func.HttpResponse:
 # ---------------------------------------------------------------------------
 @app.route(route="kb/feedback", methods=["POST"])
 def kb_feedback(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        require_access_group(req)
+    except AccessDeniedError as e:
+        return build_access_denied_response(str(e))
     try:
         parsed = parse_feedback_request(req.get_body())
     except FeedbackRequestValidationError as e:
@@ -473,10 +539,19 @@ def compliance_get_policies(req: func.HttpRequest) -> func.HttpResponse:
     (CLG_SEC_POL_001-006) with its version, approval status, and next
     review date. Always 200 — an empty policies list (before seeding) is
     a valid, non-error response.
+    HD-069: an optional X-Pin-Session-Token request header, if present and
+    valid, unlocks documentUrl for any Strictly Confidential row (none of
+    today's 6 seeded policies are Strictly Confidential, so this has no
+    visible effect on current production data).
     """
+    try:
+        require_access_group(req)
+    except AccessDeniedError as e:
+        return build_access_denied_response(str(e))
+    pin_session_valid = validate_pin_session_token(get_pin_session_token_from_request(req))
     cmdb_store = get_cmdb_store()
     compliance_store = get_compliance_store()
-    response_body = build_policies_response(cmdb_store, compliance_store)
+    response_body = build_policies_response(cmdb_store, compliance_store, pin_session_valid=pin_session_valid)
     return func.HttpResponse(
         json.dumps(response_body),
         mimetype="application/json",
@@ -494,12 +569,62 @@ def compliance_get_certificates(req: func.HttpRequest) -> func.HttpResponse:
     (Cyber Essentials, Cyber Essentials Plus) with a LIVE-computed
     daysRemaining (negative if already expired — see compliance_store.py's
     compute_days_remaining docstring) and isExpired flag. Always 200.
+    HD-069: an optional X-Pin-Session-Token request header, if present and
+    valid, unlocks documentUrl for any Strictly Confidential row (none of
+    today's 3 seeded certificates are Strictly Confidential, so this has
+    no visible effect on current production data).
     """
+    try:
+        require_access_group(req)
+    except AccessDeniedError as e:
+        return build_access_denied_response(str(e))
+    pin_session_valid = validate_pin_session_token(get_pin_session_token_from_request(req))
     cmdb_store = get_cmdb_store()
     compliance_store = get_compliance_store()
-    response_body = build_certificates_response(cmdb_store, compliance_store)
+    response_body = build_certificates_response(cmdb_store, compliance_store, pin_session_valid=pin_session_valid)
     return func.HttpResponse(
         json.dumps(response_body),
+        mimetype="application/json",
+        status_code=200,
+    )
+
+
+# ---------------------------------------------------------------------------
+# HD-067: POST /api/compliance/verifyPin — Strictly Confidential step-up
+# ---------------------------------------------------------------------------
+@app.route(route="compliance/verifyPin", methods=["POST"])
+def compliance_verify_pin(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    HD-067: verifies a submitted PIN (body: {"pin": "..."}) against the
+    IT_HELPDESK_ADMIN_PIN app setting. On success, returns a signed,
+    stateless session token (8-hour TTL) the frontend should echo back on
+    subsequent GET /api/compliance/policies|certificates calls via the
+    X-Pin-Session-Token header to unlock any Strictly Confidential rows.
+    Still requires group membership first — PIN step-up is an ADDITIONAL
+    layer on top of the group gate, not a substitute for it.
+    """
+    try:
+        require_access_group(req)
+    except AccessDeniedError as e:
+        return build_access_denied_response(str(e))
+    try:
+        body = json.loads(req.get_body() or b"{}")
+    except (json.JSONDecodeError, ValueError):
+        return func.HttpResponse(
+            json.dumps(build_error_response("Request body must be valid JSON.")),
+            mimetype="application/json",
+            status_code=400,
+        )
+    try:
+        token = verify_pin(body.get("pin", ""))
+    except PinVerificationError as e:
+        return func.HttpResponse(
+            json.dumps(build_error_response(str(e))),
+            mimetype="application/json",
+            status_code=401,
+        )
+    return func.HttpResponse(
+        json.dumps({"token": token}),
         mimetype="application/json",
         status_code=200,
     )
