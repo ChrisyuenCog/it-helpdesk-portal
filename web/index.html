@@ -424,9 +424,35 @@
      access token for it-helpdesk-api so every API call below can send a
      genuine Authorization: Bearer header, which is what auth_api.py's
      require_access_group() actually checks (via Easy Auth's
-     X-MS-CLIENT-PRINCIPAL claim). Loaded from Microsoft's official CDN,
-     same pattern as every other first-party Microsoft script include. -->
-<script src="https://alcdn.msauth.net/browser/3.18.0/js/msal-browser.min.js"></script>
+     X-MS-CLIENT-PRINCIPAL claim).
+     *** IMPORTANT — why this is an ESM import inside a module shim, not a
+     plain <script src> tag ***
+     Microsoft's own first-party CDN (alcdn.msauth.net) ONLY ever hosted
+     MSAL.js v2.x builds and was fully, permanently deprecated as of
+     msal-browser v3.0.0 — any v3+ version number against that CDN 404s by
+     design (confirmed live: HTTP 404, X-Ms-Error-Code: WebContentNotFound).
+     Current (v5.x) msal-browser's officially documented/guaranteed CDN
+     consumption path (via jsDelivr, serving the real npm package) is an
+     ESM import, NOT a classic-script global-variable build — unlike the
+     old deprecated v2 CDN, there is no reliably-documented UMD/global
+     "lib/msal-browser.min.js" file to point a plain <script src> at for
+     v5.x. This small type="module" shim below imports the real package via
+     jsDelivr's documented +esm endpoint and republishes it as
+     window.msal.PublicClientApplication, so the rest of this file's
+     EXISTING code (which uses the classic "msal.PublicClientApplication"
+     global, needed because this file also has several inline onclick="..."
+     handlers that require true global scope and can't live inside a
+     module) keeps working unchanged. window.msalReadyPromise lets the
+     classic script safely await the async network-loaded import instead
+     of assuming any particular script-execution order. -->
+<script type="module">
+  window.msalReadyPromise = import('https://cdn.jsdelivr.net/npm/@azure/msal-browser@5.23.0/+esm')
+    .then(mod => { window.msal = { PublicClientApplication: mod.PublicClientApplication }; })
+    .catch(err => {
+      console.error('Failed to load MSAL browser library (ESM import via jsDelivr):', err);
+      window.msalLoadError = err;
+    });
+</script>
 
 <script>
 // ============================================================================
@@ -483,52 +509,67 @@ const WORKFLOW_DEF_ID = "HARDWARE_REQUEST";
 // browser sign-in using the SAME it-helpdesk-web app registration, used
 // purely to acquire a token FOR it-helpdesk-api so every fetch() below can
 // prove real Entra ID identity (and therefore real group membership) to
-// auth_api.py's require_access_group() check. Requires an additional
-// "Single-page application" platform redirect URI to be registered on the
-// it-helpdesk-web app registration (see BATCH_K_IMPLEMENTATION_GUIDE.md) —
-// MSAL.js's browser library uses the auth-code+PKCE flow, which needs that
-// specific platform type; the existing "Web" platform entry used by SWA's
-// own auth is a different, confidential-client flow and will NOT work here.
+// auth_api.py's require_access_group() check. Uses the "Single-page
+// application" platform redirect URI registered on the it-helpdesk-web app
+// registration (separate from the "Web" platform entry used by SWA's own
+// built-in auth, which is a different confidential-client flow).
 const MSAL_CLIENT_ID = "0b3f61af-492a-4da6-9790-720d2f39443c"; // it-helpdesk-web app registration
 const MSAL_TENANT_ID = "03233b9e-777e-4e0e-9ed1-92b5317c5020"; // Cognition Education Ltd
 const API_SCOPE = "api://f6d7542f-fbe3-4de7-9f81-a8e6f4cbf8d2/user_impersonation"; // it-helpdesk-api
 
-const msalInstance = new msal.PublicClientApplication({
-  auth: {
-    clientId: MSAL_CLIENT_ID,
-    authority: `https://login.microsoftonline.com/${MSAL_TENANT_ID}`,
-    redirectUri: window.location.origin,
-  },
-  cache: { cacheLocation: "sessionStorage" },
-});
-
+// Lazy instance creation (NOT top-level/immediate): the classic script
+// below runs synchronously as soon as the parser reaches it, but the real
+// msal.PublicClientApplication constructor only becomes available once the
+// type="module" shim's async ESM import (jsDelivr network fetch) resolves.
+// Every entry point below awaits window.msalReadyPromise first rather than
+// assuming any particular script-execution order relative to the module.
+let msalInstance = null;
 let msalInitialized = false;
 let signedInAccount = null;
 
+async function getMsalInstance() {
+  if (msalInstance) return msalInstance;
+  await window.msalReadyPromise;
+  if (window.msalLoadError) {
+    throw new Error("MSAL library failed to load: " + (window.msalLoadError.message || window.msalLoadError));
+  }
+  msalInstance = new msal.PublicClientApplication({
+    auth: {
+      clientId: MSAL_CLIENT_ID,
+      authority: `https://login.microsoftonline.com/${MSAL_TENANT_ID}`,
+      redirectUri: window.location.origin,
+    },
+    cache: { cacheLocation: "sessionStorage" },
+  });
+  return msalInstance;
+}
+
 async function ensureMsalReady() {
+  const instance = await getMsalInstance();
   if (!msalInitialized) {
-    await msalInstance.initialize();
+    await instance.initialize();
     // Completes any pending redirect-based sign-in (not used by the popup
     // flow below today, but harmless/required by MSAL.js's lifecycle either way).
-    await msalInstance.handleRedirectPromise();
+    await instance.handleRedirectPromise();
     msalInitialized = true;
   }
+  return instance;
 }
 
 // Signs the user in (popup) if not already signed in this browser session,
 // and returns the active account. Called once on page load and lazily again
 // if a later silent token acquisition fails (e.g. session expired).
 async function ensureSignedIn() {
-  await ensureMsalReady();
-  const existingAccounts = msalInstance.getAllAccounts();
+  const instance = await ensureMsalReady();
+  const existingAccounts = instance.getAllAccounts();
   if (existingAccounts.length > 0) {
     signedInAccount = existingAccounts[0];
-    msalInstance.setActiveAccount(signedInAccount);
+    instance.setActiveAccount(signedInAccount);
     return signedInAccount;
   }
-  const loginResult = await msalInstance.loginPopup({ scopes: [API_SCOPE] });
+  const loginResult = await instance.loginPopup({ scopes: [API_SCOPE] });
   signedInAccount = loginResult.account;
-  msalInstance.setActiveAccount(signedInAccount);
+  instance.setActiveAccount(signedInAccount);
   return signedInAccount;
 }
 
@@ -536,18 +577,18 @@ async function ensureSignedIn() {
 // when possible and falling back to an interactive popup only if the
 // silent attempt fails (e.g. no cached session yet, or it has expired).
 async function getApiAccessToken() {
-  await ensureMsalReady();
+  const instance = await ensureMsalReady();
   if (!signedInAccount) {
     await ensureSignedIn();
   }
   try {
-    const result = await msalInstance.acquireTokenSilent({
+    const result = await instance.acquireTokenSilent({
       scopes: [API_SCOPE],
       account: signedInAccount,
     });
     return result.accessToken;
   } catch (silentError) {
-    const result = await msalInstance.acquireTokenPopup({ scopes: [API_SCOPE] });
+    const result = await instance.acquireTokenPopup({ scopes: [API_SCOPE] });
     signedInAccount = result.account;
     return result.accessToken;
   }
