@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Signing in…</title>
+</head>
+<body>
+<!--
+  HD-066/069 (Batch K) — dedicated, intentionally empty MSAL popup
+  redirect target.
+
+  *** WHY THIS FILE EXISTS (root cause of the "popup shows a full second
+  copy of the portal" bug) ***
+  MSAL.js's loginPopup()/acquireTokenPopup() flow works by: (1) opening a
+  popup, (2) navigating it to Microsoft's login page, (3) Microsoft
+  redirecting the popup back to the configured redirectUri, (4) MSAL's
+  OWN internal monitor — running in the OPENER window, polling the
+  popup's URL — detects the auth response and closes the popup itself.
+  Step 4 does NOT require any JS to run inside the popup at all.
+
+  The earlier bug: redirectUri was set to window.location.origin (the
+  full IT Helpdesk Portal SPA). So in step 3, the popup fully loaded and
+  executed the ENTIRE app a second time, including its own
+  msalInstance.handleRedirectPromise() call — which CONSUMED the
+  authorization response from the URL before the opener's popup monitor
+  could read it. That broke the handshake, so the popup never closed and
+  just sat there rendering a confusing second copy of the whole app.
+
+  The fix: give the popup flow a completely separate, essentially empty
+  redirect target (this file) instead of the main app URL. With nothing
+  here to process the hash, MSAL's own internal opener-side monitor reads
+  and closes it automatically, and the popup is visually just a brief
+  blank flash (if the user has an existing Microsoft SSO session, this
+  resolves near-instantly).
+
+  This file deliberately contains no MSAL library reference and no
+  application logic — that is correct and intentional, not an oversight.
+-->
+</body>
+</html>
