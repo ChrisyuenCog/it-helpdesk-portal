@@ -66,6 +66,12 @@
   [data-theme="dark"] .badge-amber { background:#3d2f14; color:#f0c674; }
   [data-theme="dark"] .badge-grey { background:#2a3142; color:#9aa3b2; }
 
+  /* Portal embed: keep the Edit column and both scrollbars always in view. */
+  #registerTab .table-wrap { max-height: calc(100vh - 330px); min-height: 260px; overflow: auto; }
+  #registerTable th:last-child, #registerTable td:last-child { position: sticky; right: 0; z-index: 1; }
+  #registerTable th:last-child { z-index: 2; }
+  #registerTable td:last-child { background: var(--card-bg); box-shadow: -8px 0 8px -8px rgba(0,0,0,.25); }
+  main { max-width: none; }
   .edit-link { color:var(--it-blue); cursor:pointer; font-weight:600; font-size:12px; }
   .edit-link:hover { text-decoration:underline; }
 
