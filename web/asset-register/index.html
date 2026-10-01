@@ -5,9 +5,11 @@
 <title>IT Asset Register — Cognition Learning Group</title>
 <style>
   :root {
-    --navy: #1F3864; --navy-dark: #14213d; --gold: #BF8F00;
-    --it-blue: #2E5395; --fin-green: #548235; --joint-brown: #833C0C;
-    --bg: #f4f6f9; --card-bg: #ffffff; --border: #e1e5eb; --text: #1a1a1a; --text-muted: #6b7280;
+    /* Cognition Connect corporate theme (orange + grey), shared with the portal. */
+    --navy: #5F6062; --navy-dark: #454648; --gold: #F47B20;
+    --orange-text: #C2560A; --orange-hover: #A34807;
+    --it-blue: #5F6062; --fin-green: #548235; --joint-brown: #833C0C;
+    --bg: #f5f5f5; --card-bg: #ffffff; --border: #e1e5eb; --text: #1a1a1a; --text-muted: #6b7280;
     --rag-red: #d9534f; --rag-amber: #f0ad4e; --rag-green: #5cb85c;
   }
   [data-theme="dark"] {
@@ -15,17 +17,17 @@
   }
   * { box-sizing: border-box; }
   body { margin:0; font-family: 'Segoe UI', Arial, sans-serif; background: var(--bg); color: var(--text); transition: background .2s, color .2s; }
-  header { background: linear-gradient(135deg, var(--navy), var(--navy-dark)); color:#fff; padding: 16px 24px; display:flex; align-items:center; justify-content:space-between; box-shadow:0 2px 8px rgba(0,0,0,.15); }
+  header { background: var(--navy); border-top: 4px solid var(--gold); color:#fff; padding: 16px 24px; display:flex; align-items:center; justify-content:space-between; box-shadow:0 2px 8px rgba(0,0,0,.15); }
   header .brand { display:flex; align-items:center; gap:12px; }
-  header .brand .logo { width:36px; height:36px; background:var(--gold); border-radius:8px; display:flex; align-items:center; justify-content:center; font-weight:bold; color:var(--navy-dark); }
+  header .brand .logo { width:36px; height:36px; background:var(--gold); border-radius:8px; display:flex; align-items:center; justify-content:center; font-weight:bold; color:#fff; }
   header h1 { font-size:18px; margin:0; font-weight:600; }
-  header .sub { font-size:11px; color:#c9d4e8; margin-top:2px; }
+  header .sub { font-size:11px; color:#e3e3e3; margin-top:2px; }
   header .actions { display:flex; gap:10px; align-items:center; }
   button { cursor:pointer; border:none; border-radius:6px; padding:8px 14px; font-size:13px; font-weight:600; transition: opacity .15s; }
   button:hover { opacity:.85; }
   .btn-gold { background:var(--gold); color:#1a1a1a; }
   .btn-ghost { background:rgba(255,255,255,.12); color:#fff; }
-  .btn-primary { background: var(--it-blue); color:#fff; }
+  .btn-primary { background: var(--orange-text); color:#fff; }
   .btn-secondary { background:#e1e5eb; color:#333; }
   .btn-danger { background:var(--rag-red); color:#fff; }
 
@@ -34,7 +36,7 @@
   .card { background:var(--card-bg); border:1px solid var(--border); border-radius:10px; padding:14px 16px; }
   .card .label { font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.5px; }
   .card .value { font-size:24px; font-weight:700; margin-top:4px; }
-  .card.gold .value { color:var(--gold); }
+  .card.gold .value { color:var(--orange-text); }
   .card.green .value { color:var(--fin-green); }
   .card.red .value { color:var(--rag-red); }
 
@@ -51,7 +53,7 @@
   .table-wrap { background:var(--card-bg); border:1px solid var(--border); border-radius:10px; overflow-x:auto; }
   table { width:100%; border-collapse:collapse; font-size:12.5px; }
   th { background:var(--it-blue); color:#fff; text-align:left; padding:9px 10px; white-space:nowrap; position:sticky; top:0; cursor:pointer; user-select:none; }
-  th:hover { background:#254478; }
+  th:hover { background:#4d4e50; }
   td { padding:8px 10px; border-bottom:1px solid var(--border); white-space:nowrap; }
   tr:hover td { background: rgba(46,83,149,.05); }
   [data-theme="dark"] tr:hover td { background: rgba(46,83,149,.15); }
@@ -72,7 +74,7 @@
   #registerTable th:last-child { z-index: 2; }
   #registerTable td:last-child { background: var(--card-bg); box-shadow: -8px 0 8px -8px rgba(0,0,0,.25); }
   main { max-width: none; }
-  .edit-link { color:var(--it-blue); cursor:pointer; font-weight:600; font-size:12px; }
+  .edit-link { color:var(--orange-text); cursor:pointer; font-weight:600; font-size:12px; }
   .edit-link:hover { text-decoration:underline; }
 
   /* Modal */
@@ -86,7 +88,7 @@
   .form-field label { font-size:11px; color:var(--text-muted); display:block; margin-bottom:3px; font-weight:600; }
   .form-field input, .form-field select, .form-field textarea { width:100%; padding:7px 9px; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--text); font-size:13px; }
   .form-field textarea { resize:vertical; min-height:50px; }
-  .section-title { grid-column:1/-1; font-size:12px; font-weight:700; color:var(--gold); text-transform:uppercase; margin-top:10px; border-bottom:1px solid var(--border); padding-bottom:4px; }
+  .section-title { grid-column:1/-1; font-size:12px; font-weight:700; color:var(--orange-text); text-transform:uppercase; margin-top:10px; border-bottom:1px solid var(--border); padding-bottom:4px; }
   .modal-actions { display:flex; justify-content:flex-end; gap:10px; margin-top:18px; }
 
   .pin-modal .modal { max-width:340px; text-align:center; }
@@ -97,7 +99,7 @@
   @keyframes pulse { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
 
   .footer-note { text-align:center; font-size:11px; color:var(--text-muted); margin-top:24px; }
-  .refresh-ts { font-size:11px; color:var(--text-muted); }
+  .refresh-ts { font-size:11px; color:#e3e3e3; }
 </style>
 </head>
 <body data-theme="light">
