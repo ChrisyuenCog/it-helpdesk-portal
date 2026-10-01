@@ -294,6 +294,7 @@
   <button class="tab-btn" data-view="myApprovals">My Approvals</button>
   <button class="tab-btn" data-view="knowledgeBase">Knowledge Base</button>
   <button class="tab-btn" data-view="policyCompliance">Policy &amp; Compliance</button>
+  <button class="tab-btn" data-view="assetRegister">IT Asset Register</button>
 </nav>
 <main>
   <!-- HD-035: Service Catalogue -->
@@ -402,6 +403,11 @@
         <button class="refresh-link" id="refreshPolicies">Refresh</button>
       </p>
       <div id="policyList"><div class="empty-state">Loading…</div></div>
+    </div>
+  </div>
+  <div class="view" id="view-assetRegister">
+    <div class="card" style="padding:1rem;">
+      <div id="assetRegisterStatus"><div class="empty-state">Checking your access…</div></div>
     </div>
   </div>
 </main>
@@ -715,6 +721,28 @@ function docLinkHtml(documentUrl) {
   return `<a href="${documentUrl}" target="_blank" rel="noopener" class="doc-link">View Document &#8599;</a>`;
 }
 // ----------------------------------------------------------------------------
+// IT Asset Register — embedded from /asset-register/ (same site, so it sits
+// behind this portal's sign-in gate). It is only loaded after the API
+// confirms the caller is in CLG - IT and Digital Transformation, and it
+// reuses this window's Microsoft sign-in token for its own API calls.
+// ----------------------------------------------------------------------------
+const ASSET_REGISTER_PATH = "/asset-register/";
+// Lets the embedded register record WHO made an edit (signedInAccount is a
+// script-level let, so it is not visible on window by itself).
+window.getSignedInUserName = () => (signedInAccount && (signedInAccount.username || signedInAccount.name)) || null;
+async function loadAssetRegister() {
+  const statusEl = document.getElementById("assetRegisterStatus");
+  if (document.getElementById("assetRegisterFrame")) return; // already loaded; keep its state
+  statusEl.innerHTML = `<div class="empty-state">Checking your access…</div>`;
+  try {
+    await apiCall("/auth/check");
+    statusEl.innerHTML = `<iframe id="assetRegisterFrame" src="${ASSET_REGISTER_PATH}" title="IT Asset Register"
+      style="width:100%;height:calc(100vh - 210px);min-height:560px;border:1px solid var(--border);border-radius:8px;background:#fff;"></iframe>`;
+  } catch (e) {
+    statusEl.innerHTML = `<div class="error-box">${e.message}</div>`;
+  }
+}
+// ----------------------------------------------------------------------------
 // Tab navigation
 // ----------------------------------------------------------------------------
 document.querySelectorAll(".tab-btn").forEach(btn => {
@@ -727,6 +755,7 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
     if (btn.dataset.view === "myDevices") loadMyDevices();
     if (btn.dataset.view === "myApprovals") loadMyApprovals();
     if (btn.dataset.view === "policyCompliance") { loadCertificates(); loadPolicies(); }
+    if (btn.dataset.view === "assetRegister") loadAssetRegister();
   });
 });
 // ----------------------------------------------------------------------------
