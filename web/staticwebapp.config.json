@@ -1,0 +1,40 @@
+{
+  "_comment": "HD-066 (adapted) — frontend-tier access gate, defence-in-depth alongside the Function App's Easy Auth + auth_api.py group check. Restricts it-helpdesk-web to authenticated CLG IT and Digital Transformation members only. This is a NEW file for the it-helpdesk-web repo root (none existed previously).",
+
+  "routes": [
+    {
+      "route": "/*",
+      "allowedRoles": ["authenticated"]
+    },
+    {
+      "route": "/.auth/login/aad",
+      "rewrite": "/.auth/login/aad"
+    }
+  ],
+
+  "responseOverrides": {
+    "401": {
+      "redirect": "/.auth/login/aad?post_login_redirect_uri=.referrer",
+      "statusCode": 302
+    }
+  },
+
+  "auth": {
+    "identityProviders": {
+      "azureActiveDirectory": {
+        "registration": {
+          "openIdIssuer": "https://login.microsoftonline.com/03233b9e-777e-4e0e-9ed1-92b5317c5020/v2.0",
+          "clientIdSettingName": "AAD_CLIENT_ID",
+          "clientSecretSettingName": "AAD_CLIENT_SECRET"
+        }
+      }
+    }
+  },
+
+  "_notes": [
+    "Tenant ID 03233b9e-777e-4e0e-9ed1-92b5317c5020 (Cognition Education Ltd) is already filled in above.",
+    "AAD_CLIENT_ID (0b3f61af-492a-4da6-9790-720d2f39443c) and AAD_CLIENT_SECRET are already set as Static Web App Environment Variables — confirmed live in the Portal.",
+    "'allowedRoles: authenticated' permits ANY signed-in CLG user past the frontend gate. The real group restriction (CLG - IT and Digital Transformation, Object ID 49cab434-8d81-44fd-b871-ecead72becdc) happens server-side in auth_api.py on every API call — this frontend gate is a UX improvement (prompts sign-in immediately) and a defence-in-depth layer, not the authoritative control.",
+    "If a future SWA custom-roles function is added, 'authenticated' above can be tightened to a specific role name once Static Web Apps' custom role-assignment function (rolesSource) is wired to check the same group Object ID."
+  ]
+}
