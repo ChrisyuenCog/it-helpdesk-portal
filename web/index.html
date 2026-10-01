@@ -276,6 +276,7 @@
     <span>IT Helpdesk Portal</span>
   </div>
   <div class="session-bar">
+    <span id="signedInIndicator" style="font-size:0.8rem;opacity:0.9;margin-right:0.75rem;">Signing in…</span>
     <label>Acting as:</label>
     <input type="text" id="sessionUpn" placeholder="your.upn@cognitionlearninggroup.com" style="width:230px;">
     <label>Role:</label>
@@ -419,6 +420,14 @@
 
 <footer>IT Helpdesk Portal — Cognition Learning Group</footer>
 
+<!-- HD-066/069 (Batch K): MSAL.js browser library — acquires a real Azure AD
+     access token for it-helpdesk-api so every API call below can send a
+     genuine Authorization: Bearer header, which is what auth_api.py's
+     require_access_group() actually checks (via Easy Auth's
+     X-MS-CLIENT-PRINCIPAL claim). Loaded from Microsoft's official CDN,
+     same pattern as every other first-party Microsoft script include. -->
+<script src="https://alcdn.msauth.net/browser/3.18.0/js/msal-browser.min.js"></script>
+
 <script>
 // ============================================================================
 // IT Helpdesk Portal — Frontend
@@ -466,6 +475,84 @@ const API_BASE = "https://it-helpdesk-api-brc9bceyhebubuf8.uksouth-01.azurewebsi
 const FUNCTION_KEY = "Tnb-20DOjiW32X3qUyLV4TxixuQejxDTGLVQ_ye1v4mSAzFuOP1ncQ==";
 const WORKFLOW_DEF_ID = "HARDWARE_REQUEST";
 
+// ----------------------------------------------------------------------------
+// HD-066/069 (Batch K) — Azure AD sign-in + access token acquisition
+// ----------------------------------------------------------------------------
+// Separate from Static Web Apps' own built-in auth gate (which only protects
+// page LOAD, via staticwebapp.config.json) — this is an independent MSAL.js
+// browser sign-in using the SAME it-helpdesk-web app registration, used
+// purely to acquire a token FOR it-helpdesk-api so every fetch() below can
+// prove real Entra ID identity (and therefore real group membership) to
+// auth_api.py's require_access_group() check. Requires an additional
+// "Single-page application" platform redirect URI to be registered on the
+// it-helpdesk-web app registration (see BATCH_K_IMPLEMENTATION_GUIDE.md) —
+// MSAL.js's browser library uses the auth-code+PKCE flow, which needs that
+// specific platform type; the existing "Web" platform entry used by SWA's
+// own auth is a different, confidential-client flow and will NOT work here.
+const MSAL_CLIENT_ID = "0b3f61af-492a-4da6-9790-720d2f39443c"; // it-helpdesk-web app registration
+const MSAL_TENANT_ID = "03233b9e-777e-4e0e-9ed1-92b5317c5020"; // Cognition Education Ltd
+const API_SCOPE = "api://f6d7542f-fbe3-4de7-9f81-a8e6f4cbf8d2/user_impersonation"; // it-helpdesk-api
+
+const msalInstance = new msal.PublicClientApplication({
+  auth: {
+    clientId: MSAL_CLIENT_ID,
+    authority: `https://login.microsoftonline.com/${MSAL_TENANT_ID}`,
+    redirectUri: window.location.origin,
+  },
+  cache: { cacheLocation: "sessionStorage" },
+});
+
+let msalInitialized = false;
+let signedInAccount = null;
+
+async function ensureMsalReady() {
+  if (!msalInitialized) {
+    await msalInstance.initialize();
+    // Completes any pending redirect-based sign-in (not used by the popup
+    // flow below today, but harmless/required by MSAL.js's lifecycle either way).
+    await msalInstance.handleRedirectPromise();
+    msalInitialized = true;
+  }
+}
+
+// Signs the user in (popup) if not already signed in this browser session,
+// and returns the active account. Called once on page load and lazily again
+// if a later silent token acquisition fails (e.g. session expired).
+async function ensureSignedIn() {
+  await ensureMsalReady();
+  const existingAccounts = msalInstance.getAllAccounts();
+  if (existingAccounts.length > 0) {
+    signedInAccount = existingAccounts[0];
+    msalInstance.setActiveAccount(signedInAccount);
+    return signedInAccount;
+  }
+  const loginResult = await msalInstance.loginPopup({ scopes: [API_SCOPE] });
+  signedInAccount = loginResult.account;
+  msalInstance.setActiveAccount(signedInAccount);
+  return signedInAccount;
+}
+
+// Returns a valid access token for it-helpdesk-api, acquiring one silently
+// when possible and falling back to an interactive popup only if the
+// silent attempt fails (e.g. no cached session yet, or it has expired).
+async function getApiAccessToken() {
+  await ensureMsalReady();
+  if (!signedInAccount) {
+    await ensureSignedIn();
+  }
+  try {
+    const result = await msalInstance.acquireTokenSilent({
+      scopes: [API_SCOPE],
+      account: signedInAccount,
+    });
+    return result.accessToken;
+  } catch (silentError) {
+    const result = await msalInstance.acquireTokenPopup({ scopes: [API_SCOPE] });
+    signedInAccount = result.account;
+    return result.accessToken;
+  }
+}
+
 // Static mirror of HARDWARE_REQUEST's transitions (MVP Specification Section
 // 4.1 / workflow_store.py's _seed_hardware_request_definition). This frontend
 // is deliberately scoped to ONE workflow category for MVP, so a small,
@@ -500,9 +587,26 @@ function getSession() {
 
 async function apiCall(path, options = {}) {
   const url = `${API_BASE}${path}${path.includes("?") ? "&" : "?"}code=${FUNCTION_KEY}`;
+  // HD-066/069: attach a real Azure AD access token for it-helpdesk-api on
+  // every call, so auth_api.py's require_access_group() can see genuine
+  // group-membership claims. The pre-existing ?code=FUNCTION_KEY query
+  // param stays — it satisfies the Function App's own route-level
+  // AuthLevel.FUNCTION requirement (unrelated to, and layered underneath,
+  // the group-membership check this Bearer token enables).
+  let accessToken;
+  try {
+    accessToken = await getApiAccessToken();
+  } catch (authError) {
+    throw new Error(`Sign-in required to call the IT Helpdesk API: ${authError.message || authError}`);
+  }
+  const headers = {
+    "Authorization": `Bearer ${accessToken}`,
+    ...(options.body ? { "Content-Type": "application/json" } : {}),
+    ...(options.pinSessionToken ? { "X-Pin-Session-Token": options.pinSessionToken } : {}),
+  };
   const resp = await fetch(url, {
     method: options.method || "GET",
-    headers: options.body ? { "Content-Type": "application/json" } : {},
+    headers,
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
   let body = null;
@@ -990,6 +1094,20 @@ async function toggleDetail(instanceId, prefix) {
 
 // Sensible default session so the page is immediately usable on first load.
 document.getElementById("sessionUpn").value = "chris.yuen@cognitionlearninggroup.com";
+
+// HD-066/069: sign in on page load so getApiAccessToken() can resolve
+// silently for every subsequent tab click / API call, rather than
+// interrupting the user with a popup the first time they click a tab.
+(async function bootstrapSignIn() {
+  const indicator = document.getElementById("signedInIndicator");
+  try {
+    const account = await ensureSignedIn();
+    indicator.textContent = `Signed in: ${account.username}`;
+  } catch (e) {
+    indicator.textContent = "Sign-in failed — API calls will be blocked until you reload and sign in.";
+    indicator.style.color = "#ffd7d2";
+  }
+})();
 </script>
 
 </body>
