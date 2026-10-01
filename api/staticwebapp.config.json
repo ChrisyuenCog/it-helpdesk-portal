@@ -1,0 +1,34 @@
+{
+  "routes": [
+    {
+      "route": "/*",
+      "allowedRoles": ["authenticated"]
+    }
+  ],
+  "responseOverrides": {
+    "401": {
+      "redirect": "/.auth/login/aad?post_login_redirect_uri=.referrer",
+      "statusCode": 302
+    }
+  },
+  "auth": {
+    "identityProviders": {
+      "azureActiveDirectory": {
+        "registration": {
+          "openIdIssuer": "https://login.microsoftonline.com/03233b9e-777e-4e0e-9ed1-92b5317c5020/v2.0",
+          "clientIdSettingName": "AAD_CLIENT_ID",
+          "clientSecretSettingName": "AAD_CLIENT_SECRET"
+        }
+      }
+    }
+  },
+  "globalHeaders": {
+    "Cross-Origin-Opener-Policy": "unsafe-none"
+  },
+  "_notes": [
+    "HD-066/069 fix: Azure Static Web Apps applies a default Cross-Origin-Opener-Policy (COOP) header that blocks the main window from reading a popup's location/closed state across origins/browsing-context-groups.",
+    "MSAL.js's loginPopup()/acquireTokenPopup() flow REQUIRES this cross-window access to detect when the popup has finished authenticating and close it automatically — under strict COOP this silently breaks and surfaces as MSAL's own 'timed_out' error after its internal polling window expires.",
+    "Setting Cross-Origin-Opener-Policy to 'unsafe-none' (equivalent to not sending the header at all) restores the opener's ability to monitor the popup, which is required specifically because this app uses the MSAL popup flow rather than the redirect flow.",
+    "This is a site-wide header override in SWA and applies to every response — there is no way to scope it to only the auth-popup.html route in SWA's config schema, but 'unsafe-none' is the default/safe value browsers already use absent any COOP header, so this does not reduce security below the pre-COOP baseline."
+  ]
+}
