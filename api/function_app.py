@@ -125,6 +125,7 @@ from auth_api import (
     PinVerificationError,
     validate_pin_session_token,
     get_pin_session_token_from_request,
+    build_access_check_body,
 )
 
 app = df.DFApp(http_auth_level=func.AuthLevel.FUNCTION)
@@ -700,6 +701,28 @@ def advance_workflow_instance(instanceId: str) -> dict:
         "transition": {"from": from_state, "to": next_state, "action": "advance"},
         "is_terminal": definition.is_terminal(next_state),
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/auth/check — "is this caller allowed?" probe
+# ---------------------------------------------------------------------------
+@app.route(route="auth/check", methods=["GET"])
+def auth_check(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Returns 200 for members of the access group and the usual 403 JSON
+    denial for everyone else. Used by the IT Asset Register tab so the
+    launch link is only shown to signed-in, authorised staff. Reads no
+    data from SQL, so it is cheap to call on every tab click.
+    """
+    try:
+        identity = require_access_group(req)
+    except AccessDeniedError as e:
+        return build_access_denied_response(str(e))
+    return func.HttpResponse(
+        json.dumps(build_access_check_body(identity)),
+        mimetype="application/json",
+        status_code=200,
+    )
 
 
 # ---------------------------------------------------------------------------

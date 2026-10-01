@@ -101,6 +101,14 @@ def test_get_pin_session_token_from_request_reads_header():
     print("PASS: PIN session token header reader works")
 
 
+def test_build_access_check_body_returns_only_user():
+    identity = auth_api.CallerIdentity(user_id="u1", user_name="cyuen@cognitionlearninggroup.com", group_ids=[REAL_GROUP_ID])
+    body = auth_api.build_access_check_body(identity)
+    assert body == {"status": "ok", "allowed": True, "user": "cyuen@cognitionlearninggroup.com"}
+    assert REAL_GROUP_ID not in json.dumps(body), "group IDs must not be echoed back"
+    print("PASS: auth/check body returns only the caller's name, no group IDs")
+
+
 if __name__ == "__main__":
     test_require_access_group_allows_member()
     test_require_access_group_denies_non_member()
@@ -111,4 +119,5 @@ if __name__ == "__main__":
     test_pin_token_expires()
     test_pin_token_bad_signature_rejected()
     test_get_pin_session_token_from_request_reads_header()
+    test_build_access_check_body_returns_only_user()
     print("\nAll auth_api tests passed.")

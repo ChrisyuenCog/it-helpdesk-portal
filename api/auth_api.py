@@ -191,6 +191,16 @@ def build_access_denied_response(message: str) -> "func.HttpResponse":
     )
 
 
+def build_access_check_body(identity: CallerIdentity) -> dict:
+    """
+    Body for GET /api/auth/check — confirms the caller passed
+    require_access_group(). Used by the frontend's IT Asset Register tab to
+    decide whether to reveal the launch link. Deliberately returns only the
+    caller's own display name: no group IDs or other claims are echoed back.
+    """
+    return {"status": "ok", "allowed": True, "user": identity.user_name or identity.user_id}
+
+
 # ---------------------------------------------------------------------------
 # HD-067/068 — PIN step-up for Strictly Confidential documents
 # ---------------------------------------------------------------------------
