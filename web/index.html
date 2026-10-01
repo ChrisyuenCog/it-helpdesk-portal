@@ -91,6 +91,8 @@
     font-weight: 600;
     border-bottom-color: var(--clg-accent);
   }
+  /* IT Asset Register tab uses the full window width (toggled in tab code). */
+  main.wide { max-width: none; }
   main {
     flex: 1;
     padding: 2rem;
@@ -751,6 +753,7 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
     document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
     btn.classList.add("active");
     document.getElementById(`view-${btn.dataset.view}`).classList.add("active");
+    document.querySelector("main").classList.toggle("wide", btn.dataset.view === "assetRegister");
     if (btn.dataset.view === "myRequests") loadMyRequests();
     if (btn.dataset.view === "myDevices") loadMyDevices();
     if (btn.dataset.view === "myApprovals") loadMyApprovals();
