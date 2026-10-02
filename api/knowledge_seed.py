@@ -1,5 +1,5 @@
 """
-Knowledge Base v2 — 30 starter articles
+Knowledge Base v2 — 68 starter articles
 =======================================
 Written from CLG_SEC_POL_001–006, the Business Continuity Plan, and standard
 Microsoft 365 / Entra / Intune behaviour. Anything specific to how CLG has set
@@ -549,6 +549,579 @@ Where a tender asks about CE+, say that CLG holds Cyber Essentials and that CE+ 
 ## Resolution
 Update the certificate in Policy & Compliance once the new CE+ certificate is issued, then retire this article.
 """, audience="IT only"),
+]
+
+
+# ---------------------------------------------------------------------------
+# Second set (37 articles), same writing rules as above.
+# ---------------------------------------------------------------------------
+SEED_ARTICLES += [
+    # ------------------------------------------------------------------ Accounts and access
+    A("request-system-access", "Accounts and sign-in", "How-to", "Request access to a system, site or shared folder",
+      "Access is granted on a need-to-know basis and approved by your manager or the system owner.",
+      ["request access", "need access", "permission", "shared folder access", "sharepoint access", "access denied"], [P2],
+      """
+CLG grants access on the principle of **least privilege**: you get the access your role needs, and nothing more (CLG_SEC_POL_002, section 3).
+
+## How to request access
+1. Ask the owner of the site, folder or system, or your manager, to approve your access.
+2. For SharePoint and Teams, the site owner can usually add you directly using **Share** or **Add members**.
+3. For business systems, contact the IT helpdesk with the system name, the access you need and who approved it.
+
+## Why it's done this way
+Access must be authorised before it's granted, and IT records changes (CLG_SEC_POL_002, section 4.2). Please don't ask a colleague to share their login: shared accounts are not allowed.
+"""),
+    A("changing-role-access", "Accounts and sign-in", "Policy summary", "Changing role? What happens to your access",
+      "When your job changes, your access is reviewed: you gain what the new role needs and lose what it doesn't.",
+      ["change role", "promotion", "new team", "transfer", "movers", "access review"], [P2],
+      """
+When you move role or team, your manager must ask for access you no longer need to be removed, and can request access for the new role (CLG_SEC_POL_002, section 4.2).
+
+## What to expect
+- Access to your old team's sites, systems and shared mailboxes may be removed.
+- New access is set up for your new role once it's approved.
+- If you still need something from your old role for a handover, agree a time limit with your manager.
+
+This keeps access matched to each person's current job, which is a key control for CLG's security certifications.
+"""),
+    A("shared-accounts", "Accounts and sign-in", "Policy summary", "Why you can't share logins",
+      "Every person has their own account. Sharing passwords or accounts is not allowed.",
+      ["shared account", "share password", "share login", "generic account", "team login"], [P2, P3],
+      """
+Every user must have a **unique user ID**, and shared accounts are prohibited except in rare cases approved by IT Security (CLG_SEC_POL_002, section 4.1).
+
+## The rules
+- Never share your password or MFA approval with anyone, including colleagues, managers or IT.
+- Don't sign in for someone else, or let them use your logged-in session.
+- If a team needs a shared mailbox or calendar, IT can set one up that each person opens with their own account.
+
+## Why
+Your account is how CLG knows who did what. Shared logins break that trail and are a common route for attackers.
+"""),
+    A("manager-access-reviews", "Accounts and sign-in", "How-to", "Access reviews: what managers and system owners need to do",
+      "Owners check who has access at least once a year, and remove anything no longer needed.",
+      ["access review", "recertification", "review access", "system owner", "manager review", "dormant accounts"], [P2],
+      """
+System and data owners must review who has access at least **annually**, and more often (for example quarterly) for sensitive systems and administrator access (CLG_SEC_POL_002, section 4.3).
+
+## When IT asks you to review
+1. Open the list IT sends you, showing each person, their access and when they last signed in.
+2. Confirm each person still needs that access for their current role.
+3. Mark anyone who has left, changed role, or hasn't used the access for 90 days for removal.
+4. Return the list to IT by the date given.
+
+> Third-party and supplier accounts should be time-limited and removed as soon as the work is finished.
+""", audience="IT only"),
+
+    # ------------------------------------------------------------------ Devices
+    A("bitlocker-encryption", "Devices", "Policy summary", "Why your laptop is encrypted, and what a recovery key is",
+      "Every CLG laptop is fully encrypted. If you're asked for a recovery key, contact IT.",
+      ["bitlocker", "filevault", "encryption", "recovery key", "encrypted laptop"], [P2],
+      """
+All CLG laptops use full disk encryption: **BitLocker** on Windows and **FileVault** on Mac (CLG_SEC_POL_002, section 7.1). If a laptop is lost or stolen, its data can't be read without your sign-in.
+
+## If your laptop asks for a recovery key
+This can happen after a hardware change, a firmware update or several failed sign-ins.
+1. Don't keep guessing.
+2. Note the **Recovery key ID** shown on screen.
+3. Contact the IT helpdesk, who can find the key for your device. [confirm: whether staff can retrieve their own key, for example from aka.ms/aadrecoverykey.]
+
+> Never write recovery keys down or store them with the laptop.
+"""),
+    A("updates-and-restarts", "Devices", "How-to", "Install updates and restart your laptop",
+      "Updates fix security holes. Restart promptly when your laptop asks, ideally the same day.",
+      ["updates", "windows update", "restart", "patch", "reboot", "update pending"], [P2, "Cyber Essentials"],
+      """
+CLG keeps devices patched on a risk-based timetable: critical security updates within about 14 days, and others within about 30 days (CLG_SEC_POL_002, section 5.3). Updates install automatically, but most need a restart to take effect.
+
+## What to do
+- When you see a restart prompt, save your work and restart at the next sensible break, ideally the same day.
+- Restart your laptop at least once a week, rather than only closing the lid.
+- Don't postpone updates repeatedly or try to switch them off.
+
+## If an update fails
+Restart and try again. If it keeps failing, contact the IT helpdesk with a screenshot of the error.
+"""),
+    A("travelling-with-devices", "Devices", "How-to", "Travelling with a CLG laptop or phone",
+      "Keep devices with you, out of sight and locked, especially in airports, hotels and on public transport.",
+      ["travel", "travelling", "airport", "hotel", "abroad", "trip", "train"], [P2],
+      """
+## Before you go
+- Make sure your laptop is updated and you can sign in to everything you'll need.
+- Take only the CLG data you need. It's all available in the cloud.
+
+## While travelling
+- Keep devices in your **hand luggage**, never in checked bags (CLG_SEC_POL_002, section 7.3).
+- Don't leave them unattended in public places. In a hotel, lock them in the safe or take them with you.
+- Lock your screen whenever you step away, and watch for people looking at your screen.
+- Avoid unsecured public Wi-Fi for sensitive work. Use your phone's hotspot instead.
+
+## If a device goes missing
+Report it to the IT helpdesk immediately (see **What to do if your laptop or phone is lost or stolen**).
+"""),
+    A("laptop-acting-strangely", "Devices", "Troubleshooting", "Your laptop is behaving strangely",
+      "Pop-ups, slowness or unfamiliar programs can be signs of malware. Stop and tell IT.",
+      ["slow laptop", "pop ups", "strange behaviour", "virus", "infected", "hacked", "weird"], [P2],
+      """
+## Symptoms that may mean malware
+- Sudden pop-ups, new browser toolbars or a changed home page.
+- Programs you didn't install, or files you can't open or that have new extensions.
+- Security warnings from Sophos.
+- The laptop becomes very slow, or its fan runs constantly when you're doing little.
+
+## What to do
+1. **Stop using the laptop for CLG work** (CLG_SEC_POL_002, section 5.4).
+2. If files are being renamed or encrypted, disconnect from Wi-Fi straight away.
+3. Contact the IT helpdesk. IT will inspect the device and only return it once it's confirmed safe, re-imaging it if necessary.
+
+> Slowness alone is usually not malware. A restart and installing updates often fixes it. If in doubt, ask.
+"""),
+    A("personal-use-of-devices", "Devices", "Policy summary", "Personal use of your CLG laptop",
+      "Limited, sensible personal use is allowed, as long as it doesn't create risk or interfere with work.",
+      ["personal use", "personal browsing", "use laptop for personal", "home use", "family use"], [P2, P3],
+      """
+CLG devices are provided for business. **Limited personal use** is allowed where it's reasonable, doesn't interfere with your work, and doesn't introduce security or reputational risk (CLG_SEC_POL_003, section 4).
+
+## Please don't
+- Download illegal software, games or media, or visit risky websites (CLG_SEC_POL_002, section 7.3).
+- Let family or friends use your CLG laptop, or use a personal device for work while someone else is using it.
+- Store personal files such as photos or music on your CLG laptop.
+
+Remember that CLG monitors use of its systems, so there's no expectation of complete privacy (CLG_SEC_POL_003, section 11).
+"""),
+    A("laptop-broken", "Devices", "How-to", "Your laptop is broken or damaged",
+      "Report it to IT. Your work is in the cloud, so you can carry on as soon as you have another device.",
+      ["broken laptop", "damaged laptop", "cracked screen", "spilled", "wont turn on", "faulty laptop"], [BCP],
+      """
+## What to do
+1. Stop using the device if it's physically damaged, for example after a liquid spill.
+2. Contact the IT helpdesk with what happened and when.
+3. Carry on working from another device by signing in to Microsoft 365 in a browser, if you have one.
+
+## What IT will do
+IT checks whether the repair is covered by warranty or insurance, arranges repair or replacement, and provides a temporary device if needed so there's no disruption to your work (Business Continuity Plan, Critical Function 1). [confirm: how long a replacement typically takes.]
+"""),
+    A("my-devices", "Devices", "How-to", "Check the devices registered to you",
+      "See which CLG laptops and phones are recorded against your name, and report anything that's wrong.",
+      ["my devices", "devices registered", "asset", "which laptop", "serial number"], [P2],
+      """
+CLG keeps an inventory of all IT equipment, with an owner for each item (CLG_SEC_POL_002, section 5.1).
+
+## Check your devices
+1. Open **My Devices** in this portal.
+2. Check the list matches the equipment you actually have.
+
+## If something's wrong
+Contact the IT helpdesk if a device is missing from the list, or if one is listed that you no longer have, for example because you returned it.
+"""),
+
+    # ------------------------------------------------------------------ Security
+    A("fake-it-calls", "Security", "How-to", "Calls or messages pretending to be from IT or a manager",
+      "Attackers impersonate IT, suppliers and senior staff. Never share passwords or MFA codes, whoever asks.",
+      ["fake it call", "impersonation", "social engineering", "scam call", "pretending to be it", "ceo fraud"], [P2, P3],
+      """
+Criminals call, text or message staff pretending to be the IT helpdesk, Microsoft, a supplier or a senior colleague.
+
+## CLG IT will never ask you to
+- Tell them your password.
+- Read out an MFA code or approve a sign-in request.
+- Install remote-control software you weren't expecting.
+
+## If you're unsure
+1. End the call or don't reply.
+2. Contact the person or team back through a number or address you already know, not one given in the message.
+3. Report it to the IT helpdesk, even if you didn't share anything. It helps warn colleagues.
+
+Staying alert to social engineering is a responsibility under CLG_SEC_POL_003, section 5.4.
+"""),
+    A("payment-fraud", "Security", "How-to", "Requests to change bank details or make urgent payments",
+      "Always confirm payment changes by phone using a number you already have. Never trust the email alone.",
+      ["bank details", "invoice fraud", "urgent payment", "change bank", "payment request", "gift cards"], [P2],
+      """
+A common fraud is an email, apparently from a supplier or a senior colleague, asking you to change bank details or make an urgent payment.
+
+## Warning signs
+- Pressure to act quickly or keep it confidential.
+- A new or changed bank account.
+- A slightly different email address, or a reply-to address that doesn't match.
+- Requests for gift cards or unusual payment methods.
+
+## What to do
+1. **Don't act on the email.**
+2. Phone the supplier or colleague on a number you already have, not one in the email, and confirm the request.
+3. Report the email to the IT helpdesk as suspected phishing.
+4. If a payment has already been made, tell your manager and Finance immediately: speed matters for recovery.
+"""),
+    A("clear-desk-clear-screen", "Security", "Policy summary", "Clear desk and clear screen",
+      "Lock away papers and lock your screen whenever you leave your workspace, in the office and at home.",
+      ["clear desk", "clear screen", "paperwork", "lock away", "whiteboard", "desk"], [P2, P3],
+      """
+CLG follows a **clear desk and clear screen** approach, including when working from home (CLG_SEC_POL_003, section 6).
+
+## In practice
+- Lock your screen whenever you leave your device.
+- Lock away papers containing sensitive information when you're not using them (CLG_SEC_POL_002, section 11.1).
+- Wipe whiteboards and remove notes after meetings.
+- Don't leave documents on printers.
+- Store any USB drives or printed reports securely, and dispose of them securely when finished.
+"""),
+    A("printing-and-disposal", "Security", "How-to", "Printing and disposing of paper documents",
+      "Print sensitive documents only when you must, collect them straight away, and shred them when done.",
+      ["printing", "print", "shredding", "dispose paper", "confidential waste", "paper records"], [P2, P4],
+      """
+Most CLG work is digital, so avoid printing sensitive information wherever you can.
+
+## If you need to print
+- Collect printouts immediately and never leave them unattended (CLG_SEC_POL_002, section 8.3).
+- Keep printed personal data locked away when not in use (CLG_SEC_POL_004, section 6).
+
+## Disposing of paper
+- In the office, use the secure shredding bins.
+- At home, shred documents, or bring them to the office for secure disposal (CLG_SEC_POL_002, section 11.2).
+- Never put documents containing personal or confidential information in ordinary recycling.
+"""),
+    A("report-security-weakness", "Security", "How-to", "Spotted something that looks insecure? Tell IT",
+      "Reporting weaknesses before they're exploited is one of the most helpful things you can do.",
+      ["security weakness", "vulnerability", "something insecure", "report weakness", "security concern", "bug"], [P2, P3],
+      """
+You're encouraged to report potential security weaknesses, not only incidents (CLG_SEC_POL_002, section 3).
+
+## Examples worth reporting
+- A shared folder or link that more people can open than should.
+- A system that doesn't ask for MFA when you'd expect it to.
+- A process that relies on sharing a password.
+- A supplier asking for data in an unsafe way.
+
+## How to report
+Contact the IT helpdesk and describe what you noticed. Please don't test or try to exploit the weakness yourself. You won't be penalised for honest reporting (CLG_SEC_POL_003, section 10).
+"""),
+    A("security-policies-overview", "Security", "Policy summary", "CLG's security policies explained",
+      "A quick guide to the six policies that make up CLG's information security framework.",
+      ["security policies", "policy framework", "isms", "iso 27001", "information security policy"], [P1],
+      """
+CLG keeps a deliberately small set of six Board-approved policies, aligned with ISO/IEC 27001:2022 (CLG_SEC_POL_001, section 7). You can read them all under **Policy & Compliance**.
+
+- **ISMS Policy (001):** the overall framework, objectives and responsibilities.
+- **Information and Cyber Security Policy (002):** the technical controls: access, devices, networks, data, monitoring and incidents.
+- **Acceptable Use and Remote Working Policy (003):** what every user must and mustn't do, at work and at home.
+- **Data Protection and Privacy Policy (004):** how CLG handles personal data under UK GDPR and local law.
+- **Secure Software Development Policy (005):** how CLG builds and changes software securely.
+- **AI Governance Policy (006):** how AI tools may be used.
+
+Everyone must read and acknowledge the policies, and follow them wherever they work (CLG_SEC_POL_001, section 9).
+"""),
+    A("what-clg-monitors", "Security", "Policy summary", "What CLG monitors on its systems, and why",
+      "CLG monitors its systems to protect information and detect threats. Here's what that means for you.",
+      ["monitoring", "privacy at work", "is my activity monitored", "logs", "tracking"], [P2, P3, P4],
+      """
+CLG monitors use of its systems to protect information, detect security threats and misuse, and support audits and legal obligations (CLG_SEC_POL_003, section 11).
+
+## What this includes
+- Security events such as sign-ins, failed sign-ins, account changes and malware alerts (CLG_SEC_POL_002, section 9.1).
+- Alerts for unusual activity, such as large uploads to external sites (CLG_SEC_POL_002, section 8.3).
+
+## What it means for you
+- There's no expectation of absolute privacy when using CLG systems.
+- Monitoring is carried out in line with data protection law, and the Employee Privacy Notice explains how staff data is used (CLG_SEC_POL_004, section 3).
+- Logs are protected, and only authorised IT and Security staff can access them.
+"""),
+
+    # ------------------------------------------------------------------ Data protection
+    A("subject-access-request", "Data protection", "How-to", "Someone has asked for a copy of their personal data",
+      "Forward the request straight away. CLG normally has one month to respond.",
+      ["subject access request", "sar", "dsar", "copy of my data", "data request", "erasure request", "delete my data"], [P4],
+      """
+People have the right to ask what personal data CLG holds about them, and to ask for it to be corrected, deleted or restricted (CLG_SEC_POL_004, section 7). Requests can arrive in any form: an email, a letter or even a conversation.
+
+## What to do
+1. **Forward the request immediately** to the People team (for staff) or the ISMS Manager (for everyone else). Don't try to answer it yourself.
+2. Don't delete or change any data the person may be asking about.
+3. Note the date you received it: CLG normally has **one month** to respond, starting from that date.
+
+The responsible team will verify the person's identity before releasing or changing anything.
+"""),
+    A("wrong-recipient", "Data protection", "How-to", "You sent personal data to the wrong person",
+      "Report it straight away. CLG may have 72 hours to tell the ICO, so every hour counts.",
+      ["wrong recipient", "sent to wrong person", "misdirected email", "wrong email", "data breach", "mistake email"], [P4, P2],
+      """
+Sending personal data to the wrong person is a **personal data breach**, even if it was a simple mistake.
+
+## Do this now
+1. **Report it immediately** to the IT helpdesk or the ISMS Manager (CLG_SEC_POL_004, section 11).
+2. Say what was sent, to whom, how many people's data it included, and when.
+3. If you know the recipient, ask them politely to delete it and confirm they've done so, but report it first.
+
+## Why speed matters
+If the breach is notifiable, CLG must tell the ICO within **72 hours** of becoming aware of it. You won't be penalised for reporting an honest mistake; concealing a breach is a serious disciplinary matter.
+"""),
+    A("check-before-you-send", "Data protection", "How-to", "Check before you send: avoiding misdirected emails",
+      "A few seconds of checking prevents most data breaches by email.",
+      ["check recipient", "autocomplete", "email mistakes", "reply all", "bcc", "before sending"], [P4],
+      """
+Double-checking email recipients is one of every staff member's data protection duties (CLG_SEC_POL_004, section 12).
+
+## Before you press Send
+- **Check every recipient.** Outlook's autocomplete often suggests the wrong person with a similar name.
+- **Use Bcc** when emailing many external people who shouldn't see each other's addresses.
+- **Think before Reply All.**
+- **Check attachments.** Is it the right file, and does it contain more personal data than the recipient needs?
+- **Share a link** to a OneDrive or SharePoint file rather than attaching it, so you can remove access if needed.
+
+If you do send something to the wrong person, see **You sent personal data to the wrong person**.
+"""),
+    A("retention-and-deletion", "Data protection", "Policy summary", "How long to keep personal data",
+      "Keep personal data only as long as it's needed, then delete it securely.",
+      ["retention", "how long to keep", "delete data", "old data", "retention schedule", "keep records"], [P4],
+      """
+CLG keeps personal data only as long as necessary for the purpose it was collected for, or as required by law or contract (CLG_SEC_POL_004, section 9).
+
+## In practice
+- Check the Group retention schedule for the type of record. Ask the ISMS Manager if you're unsure.
+- Don't keep personal data "just in case".
+- When it's no longer needed, delete electronic copies and shred paper ones.
+- When a client project ends, keep only what's needed for closure and any required retention.
+
+[confirm: the employee and payroll retention period. Data Protection and Privacy Policy V1.1, which sets seven years after employment ends, is pending Board approval.]
+"""),
+    A("dpia-new-project", "Data protection", "How-to", "Starting a project or system that uses personal data",
+      "Build privacy in from the start, and check whether a Data Protection Impact Assessment is needed.",
+      ["dpia", "new project", "privacy impact assessment", "privacy by design", "new system", "new process"], [P4],
+      """
+Any new initiative or change involving personal data must consider privacy from the planning stage (CLG_SEC_POL_004, section 8).
+
+## What to do
+1. **Talk to the ISMS Manager early**, before choosing a system or supplier.
+2. Collect only the data you genuinely need, and justify each field.
+3. Use privacy-friendly defaults, for example limiting who can see personal details.
+4. A **Data Protection Impact Assessment (DPIA)** is required for processing likely to be high risk, or whenever the ISMS Manager asks for one.
+
+Examples: a new CRM, an LMS feature that collects new learner data, or a new supplier processing staff data.
+"""),
+    A("new-supplier-or-tool", "Data protection", "How-to", "Using a new supplier or online tool for CLG data",
+      "Any supplier or tool that will handle CLG data must be checked and approved first.",
+      ["new supplier", "new tool", "online tool", "saas", "vendor", "free tool", "sign up"], [P2, P4],
+      """
+Before CLG uses a supplier or online service that will handle CLG data, it must pass a security and privacy check (CLG_SEC_POL_002, section 12.1; CLG_SEC_POL_004, section 10).
+
+## Please don't
+Sign up to online tools with your CLG account, or upload CLG data to them, before they're approved. This includes free tools and trials.
+
+## How to get a tool approved
+1. Contact the IT helpdesk with the tool's name, what you want to use it for and what data it will hold.
+2. IT assesses its security, and suppliers handling personal data must sign a Data Processing Agreement.
+3. You'll be told when it's approved, and any conditions of use.
+
+For AI tools, see **Request a new AI tool**.
+"""),
+    A("sending-data-overseas", "Data protection", "Policy summary", "Sending personal data to another country",
+      "Personal data can cross borders only with the right safeguards. Check before you send.",
+      ["international transfer", "overseas", "another country", "new zealand", "australia", "transfer data abroad"], [P4],
+      """
+CLG operates in the UK, Australia, New Zealand and the Pacific Islands, so personal data sometimes moves between countries. This must follow the transfer rules (CLG_SEC_POL_004, section 10).
+
+## The rules
+- Send personal data overseas only when there's a business need.
+- Transfers from the UK or EU to a country without an "adequacy decision" need approved safeguards, such as Standard Contractual Clauses.
+- Use CLG's approved systems rather than emailing files, so data stays protected.
+- CLG prefers to host and process data in-region where feasible.
+
+If you're setting up a new regular transfer, or using a supplier in another country, check with the ISMS Manager first.
+"""),
+    A("sensitive-personal-data", "Data protection", "Policy summary", "Health, safeguarding and other highly sensitive data",
+      "Special category and children's data need extra care. Share it only when you must, and only securely.",
+      ["special category", "health data", "safeguarding", "children", "medical", "sensitive data"], [P4, P6],
+      """
+Some personal data is especially sensitive: health, ethnicity, criminal records, safeguarding information and children's data. CLG classifies it as **Highly Confidential** (CLG_SEC_POL_004, section 6).
+
+## Extra rules
+- Process it only under the additional legal conditions that apply, such as explicit consent or legal necessity (section 5).
+- Limit access strictly to people who need it.
+- Never send it by ordinary email to external recipients.
+- Never enter it into AI tools unless that specific use has been approved (CLG_SEC_POL_006, section 7).
+
+If you're unsure whether you can use or share such data, ask the ISMS Manager before acting.
+"""),
+
+    # ------------------------------------------------------------------ Working remotely and continuity
+    A("home-workspace", "Working remotely", "How-to", "Set up a secure home workspace",
+      "A few simple steps keep CLG information safe when you work from home.",
+      ["home office", "home workspace", "work from home setup", "privacy screen", "family"], [P2, P3],
+      """
+Remote working doesn't reduce your security obligations: every policy applies at home too (CLG_SEC_POL_003, section 6).
+
+## Your workspace
+- Work where others can't easily see your screen or overhear calls. A privacy screen helps if you handle sensitive data (CLG_SEC_POL_002, section 11.2).
+- Keep work devices separate from family use.
+- Lock your screen whenever you step away.
+- Keep any printed material confidential, and shred it when finished.
+
+## Your connection
+- Secure your Wi-Fi (see **Secure your home Wi-Fi**).
+- Have a back-up connection ready, such as your phone's hotspot (see **Your internet connection is down**).
+"""),
+    A("cant-get-to-office", "Working remotely", "How-to", "If you can't get to the office",
+      "Weather, transport or building problems? Work remotely, and let your manager know.",
+      ["office closed", "cant get to office", "snow", "strike", "building closed", "power cut"], [BCP],
+      """
+Because CLG's systems are all cloud-based and much of the team already works remotely, most work can continue from anywhere (Business Continuity Plan).
+
+## What to do
+1. Tell your manager you'll be working remotely.
+2. Work from home, or another safe location, using your CLG laptop.
+3. If the office has lost power or been locked out, the building manager handles it, and staff may be redeployed to another site (Business Continuity Plan, Site Failure).
+
+## Be prepared
+Keep your laptop and phone charged, and take your laptop home when bad weather or disruption is forecast.
+"""),
+    A("major-incident-communication", "Working remotely", "Policy summary", "What happens in a major incident",
+      "How CLG will contact you in an emergency, and what you need to do.",
+      ["major incident", "emergency", "business continuity", "call tree", "how will i be contacted", "disaster"], [BCP],
+      """
+CLG's Business Continuity Plan sets out how the business keeps running during a major incident such as a fire, flood, pandemic or large cyber attack.
+
+## How you'll be contacted
+- By **email** first, or by **text message or WhatsApp** if email is unavailable (Business Continuity Plan, Command and Control).
+- You'll be asked to **confirm you received the message**. This is tested once a year with a call-tree exercise.
+
+## What to do
+- Reply to confirm, and follow the instructions you're given.
+- Keep your contact details up to date in Zoho People, so you can be reached.
+- Major incidents are led by the CEO, so please don't contact clients about the incident unless you're asked to.
+"""),
+    A("phones-not-working", "Working remotely", "Troubleshooting", "Your phone or calls aren't working",
+      "Switch to another channel straight away, and report the outage.",
+      ["phone not working", "voip", "calls not working", "no dial tone", "telephony", "teams calls"], [BCP],
+      """
+## Symptom
+You can't make or receive calls on your work phone line.
+
+## Carry on working
+- Use **Teams** calls and chat, or email, which are unaffected by most phone outages.
+- Use your mobile phone as a back-up. Calls to an unavailable line can be diverted to a mobile or voicemail (Business Continuity Plan, VoIP Telephony Failure).
+
+## Report it
+Contact the IT helpdesk, saying whether it's just you or colleagues too. IT reports the fault to the provider within the first hour and keeps chasing until it's resolved (Business Continuity Plan, Critical Function 3).
+"""),
+
+    # ------------------------------------------------------------------ Microsoft 365 and Zoho
+    A("microsoft-365-outage", "Microsoft 365 and Zoho", "Troubleshooting", "Microsoft 365 seems to be down",
+      "Check whether it's just you, then use the workarounds until service returns.",
+      ["microsoft 365 down", "outlook down", "teams down", "outage", "service down", "email not working"], [BCP],
+      """
+## Is it just you?
+1. Check the known issues on the Knowledge Base home page.
+2. Ask a colleague whether they're affected.
+3. Try Outlook or Teams in a web browser at [outlook.office.com](https://outlook.office.com).
+
+## If everyone is affected
+Microsoft 365 runs across multiple data centres and usually recovers quickly. Its uptime was above 99.9% in every quarter from 2020 to 2025 (Business Continuity Plan, Microsoft 365). IT monitors Microsoft's service health dashboard and will post a known issue here.
+- Use your phone or text message for anything urgent.
+- Don't re-send emails repeatedly; they'll be delivered when the service recovers.
+
+## If it's only you
+Restart your laptop, check your internet connection, and see **Can't sign in or account locked**.
+"""),
+    A("zoho-security", "Microsoft 365 and Zoho", "Policy summary", "Using Zoho apps securely",
+      "Zoho holds CLG data, so the same rules apply as for Microsoft 365: MFA, approved use, and your own account.",
+      ["zoho", "zoho one", "zoho crm", "zoho desk", "zoho security", "zoho login"], [BCP, P2],
+      """
+CLG uses Zoho One apps, such as Zoho People, for core business processes, and MFA is enforced on Zoho as on all CLG cloud services (Business Continuity Plan).
+
+## The rules
+- Sign in with your own account and MFA. Never share logins.
+- Use Zoho only for the CLG purposes it's been set up for.
+- Store CLG data only in approved systems, and don't export personal data to spreadsheets you keep on your laptop.
+- Report anything unusual, such as unexpected sign-in prompts, to the IT helpdesk.
+
+Zoho publishes its security and performance information at [zoho.com/security](https://www.zoho.com/security.html).
+"""),
+
+    # ------------------------------------------------------------------ AI
+    A("request-ai-tool", "AI", "How-to", "Request a new AI tool",
+      "Every AI tool must be approved before it's used for CLG work. Here's how to ask.",
+      ["request ai tool", "new ai tool", "ai approval", "use ai app", "ai request form"], [P6],
+      """
+No AI tool, feature or automated workflow may be used for CLG information until it's been assessed and approved (CLG_SEC_POL_006, section 4).
+
+## How to request one
+1. Complete the **AI Tool Request form** with the business reason and a risk assessment [confirm: where the form is].
+2. IT and Compliance review it for security, privacy and compliance risks.
+3. The designated authority makes the decision, and you're told the outcome (section 9).
+
+## What reviewers look for
+- What information the tool would process, and whether that's allowed (see **What you must never put into AI tools**).
+- Whether the supplier uses customer data to train its models, and how long it keeps data.
+- Whether it can be accessed with your CLG account, with logging.
+
+Don't start using the tool, including a free trial, until it's approved.
+"""),
+    A("report-ai-incident", "AI", "How-to", "Report an AI mistake or data exposure",
+      "Entered something you shouldn't, or got harmful output? Report it straight away.",
+      ["ai incident", "ai mistake", "pasted data", "pasted into", "ai leak", "harmful ai output"], [P6],
+      """
+Any suspected or actual AI-related incident must be reported immediately through CLG's incident process (CLG_SEC_POL_006, section 12).
+
+## Examples
+- You pasted personal or confidential information into an AI tool.
+- You used an unapproved AI tool for CLG work.
+- An AI tool produced harmful, biased or misleading output that was used or sent.
+- An AI tool's account or connection may have been compromised.
+
+## What to do
+Contact the IT helpdesk with which tool, what happened and what information was involved. Don't delete the conversation. If personal data was involved, it's handled as a potential data breach, where speed matters.
+"""),
+
+    # ------------------------------------------------------------------ Secure development (IT only)
+    A("developer-secure-coding", "Secure development", "Policy summary", "Secure development: the essentials for developers",
+      "The key rules from the Secure Software Development Policy for anyone writing or changing code.",
+      ["secure coding", "developer", "sdlc", "code review", "owasp", "secure development"], [P5],
+      """
+These apply to all CLG software, including the LMS, integrations, scripts and infrastructure as code (CLG_SEC_POL_005).
+
+## Every change
+- Consider security and privacy requirements from the start, with threat modelling for new systems or major changes.
+- Follow CLG's secure coding standards: validate input, handle errors safely, and protect against common vulnerabilities such as XSS and SQL injection.
+- Get every significant change **peer reviewed** with security in mind, and run the security checks in the pipeline.
+- Don't deploy your own code to production without independent review.
+
+## Code and data
+- Keep code only in CLG-approved repositories, never in personal or public ones.
+- Use anonymised or fabricated test data, not real personal data.
+- Keep dependencies up to date, and fix known critical vulnerabilities promptly.
+""", audience="IT only"),
+    A("secrets-in-code", "Secure development", "How-to", "Never put passwords or keys in code",
+      "Secrets in source code are a leading cause of breaches. Use the secret store, and rotate anything exposed.",
+      ["secrets", "api key", "password in code", "hard-coded", "key vault", "credentials", "leaked key"], [P5],
+      """
+Secrets such as passwords, API keys, tokens and certificates must never be hard-coded or committed to source control (CLG_SEC_POL_005, sections 5 and 8).
+
+## Do
+- Store secrets in an approved vault, such as Azure Key Vault, and load them at runtime.
+- Keep secrets out of logs, error messages and screenshots.
+- Rotate secrets regularly.
+
+## If a secret has been committed or shared
+1. Treat it as compromised, even if the repository is private.
+2. **Rotate it immediately**: create a new secret and revoke the old one.
+3. Remove it from the code, and report it to the ISMS Manager as a security incident.
+""", audience="IT only"),
+    A("contractor-access", "Joining and leaving", "How-to", "Giving a contractor or supplier access to CLG systems",
+      "Contractor access must be sponsored, limited, time-bound and removed when the work ends.",
+      ["contractor access", "supplier access", "temporary access", "consultant", "guest account", "third party access"], [P2, P6],
+      """
+Third-party accounts follow the same rules as staff accounts, with extra limits (CLG_SEC_POL_002, sections 4.3 and 12.3).
+
+## As the sponsoring manager
+1. Request the account through the IT helpdesk, naming yourself as the internal owner.
+2. Ask only for the access the work needs, and give an end date.
+3. Make sure a contract or NDA is in place covering confidentiality, and AI use if relevant (CLG_SEC_POL_006, section 9).
+4. Tell IT as soon as the work finishes, so the account is disabled.
+
+## The contractor must
+- Have their own unique account with MFA. No shared logins.
+- Use only CLG-approved tools for CLG data.
+- Report any suspected incident immediately.
+"""),
 ]
 
 

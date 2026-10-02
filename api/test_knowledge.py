@@ -40,6 +40,14 @@ def test_search_synonyms_and_ranking():
         "where do I save files": "where-to-save-files", "recover deleted email": "recover-deleted-email-file",
         "can I use chatgpt": "approved-ai-tools", "internet not working": "internet-down",
         "usb stick": "usb-drives", "new laptop": "request-new-hardware", "first day": "new-starter-first-day",
+        "bitlocker recovery key": "bitlocker-encryption", "change bank details email": "payment-fraud",
+        "someone called pretending to be IT": "fake-it-calls", "sent email to wrong person": "wrong-recipient",
+        "subject access request": "subject-access-request", "teams is down": "microsoft-365-outage",
+        "office closed snow": "cant-get-to-office", "request access to sharepoint folder": "request-system-access",
+        "laptop broken": "laptop-broken", "travelling abroad with laptop": "travelling-with-devices",
+        "api key in code": "secrets-in-code", "give contractor access": "contractor-access",
+        "request new ai tool": "request-ai-tool", "pasted data into chatgpt": "report-ai-incident",
+        "dpia": "dpia-new-project", "phone calls not working": "phones-not-working",
     }
     for q, want in cases.items():
         got = k.search(q, arts, include_drafts=True)
@@ -47,6 +55,14 @@ def test_search_synonyms_and_ranking():
     for off_topic in ("annual leave policy", "expenses claim", "book a meeting room", "payroll question"):
         assert k.search(off_topic, arts, include_drafts=True) == [], off_topic
     print(f"PASS: {len(cases)} everyday queries find the right article (incl. synonyms); 4 off-topic queries find nothing")
+
+
+def test_no_generic_single_word_keywords():
+    from tender_api import tokens
+    generic = {"policy", "data", "security", "inform", "information", "process", "staff", "system", "service", "plan", "use", "work"}
+    bad = [(a["articleId"], kw) for a in SEED_ARTICLES for kw in a["keywords"] if len(tokens(kw)) == 1 and tokens(kw)[0] in generic]
+    assert not bad, bad
+    print(f"PASS: no article uses a generic single-word keyword ({len(SEED_ARTICLES)} checked)")
 
 
 def test_readers_see_only_approved():
@@ -187,6 +203,7 @@ def test_routes():
 if __name__ == "__main__":
     test_seed_shape()
     test_search_synonyms_and_ranking()
+    test_no_generic_single_word_keywords()
     test_readers_see_only_approved()
     test_approval_rules_and_versioning()
     test_feedback_validation()
