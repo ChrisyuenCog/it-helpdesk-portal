@@ -282,6 +282,7 @@
 <link rel="stylesheet" href="/knowledge/knowledge.css">
 <link rel="stylesheet" href="/software/software.css">
 <link rel="stylesheet" href="/home/home.css">
+<link rel="stylesheet" href="/requests/requests.css">
 </head>
 <body>
 <header>
@@ -289,16 +290,7 @@
   </div>
   <div class="session-bar">
     <span id="signedInIndicator" style="font-size:0.8rem;opacity:0.9;margin-right:0.75rem;">Checking sign-in…</span>
-    <label>Acting as:</label>
-    <input type="text" id="sessionUpn" placeholder="your.upn@cognitionlearninggroup.com" style="width:230px;">
-    <label>Role:</label>
-    <select id="sessionRole">
-      <option value="Requester">Requester</option>
-      <option value="Approver">Approver</option>
-      <option value="ITAgent">IT Agent</option>
-      <option value="ITAdmin">IT Admin</option>
-      <option value="Executive">Executive</option>
-    </select>
+    <span class="session-roles" id="signedInRoles" aria-label="Your portal roles"></span>
   </div>
 </header>
 <nav class="tabs">
@@ -363,16 +355,7 @@
       </div>
     </div>
     <!-- HD-036: Hardware Request submission form -->
-    <div class="card" id="hwRequestForm" style="display:none;">
-      <h2>New Hardware Request</h2>
-      <p class="subtitle">This creates a request that routes to your manager, then IT, before procurement.</p>
-      <label class="field-label">Item description</label>
-      <input type="text" id="hwItemDescription" placeholder="e.g. Dell Latitude 5450 laptop">
-      <label class="field-label">Justification (optional)</label>
-      <textarea id="hwJustification" placeholder="Why do you need this item?"></textarea>
-      <button class="btn btn-primary" id="hwSubmitBtn">Submit Request</button>
-      <div id="hwFormResult"></div>
-    </div>
+    <div class="card" id="hwRequestForm" style="display:none;"></div>
     <!-- HD-039/041: Password / SSPR tile + guided wizard -->
     <div class="card" id="ssprPanel" style="display:none;">
       <h2>Password &amp; Identity Self-Service</h2>
@@ -388,38 +371,15 @@
   </div>
   <!-- HD-036 (tracking): My Requests -->
   <div class="view" id="view-myRequests">
-    <div class="card">
-      <h2>My Requests</h2>
-      <p class="subtitle">Every request you've submitted, across every category, most recent first.
-        <button class="refresh-link" id="refreshMyRequests">Refresh</button>
-      </p>
-      <div id="myRequestsList"><div class="empty-state">Loading…</div></div>
-    </div>
+    <div id="myRequestsApp"></div>
   </div>
   <!-- HD-037: My Devices -->
   <div class="view" id="view-myDevices">
-    <div class="card">
-      <h2>My Devices</h2>
-      <p class="subtitle">Hardware currently assigned to you in the CMDB.
-        <button class="refresh-link" id="refreshMyDevices">Refresh</button>
-      </p>
-      <div id="myDevicesList"><div class="empty-state">Loading…</div></div>
-    </div>
+    <div id="myDevicesApp"></div>
   </div>
   <!-- HD-038: My Approvals -->
   <div class="view" id="view-myApprovals">
-    <div class="card">
-      <h2>My Approvals</h2>
-      <p class="subtitle">Every request currently awaiting a decision from your role.
-        <button class="refresh-link" id="refreshMyApprovals">Refresh</button>
-      </p>
-      <div class="scope-note">
-        MVP note: role and identity are self-declared above (top-right) for demonstration purposes —
-        this is not yet backed by a validated Entra ID token. Real access-control lands with Security
-        Hardening (HD-066).
-      </div>
-      <div id="myApprovalsList"><div class="empty-state">Loading…</div></div>
-    </div>
+    <div id="myApprovalsApp"></div>
   </div>
   <!-- HD-045/047: Knowledge Base search + feedback -->
   <div class="view" id="view-knowledgeBase">
@@ -686,28 +646,12 @@ async function getApiAccessToken() {
 // fully generic transition UI from the raw workflow_definition JSON — Batch
 // E's acceptance criteria only cover Hardware Request, not a generic
 // workflow-definition-driven UI (that would be a much larger future ticket).
-const STATE_ACTIONS = {
-  ManagerApproval: [
-    { action: "approve", label: "Approve", role: "Approver", style: "btn-approve" },
-    { action: "reject", label: "Reject", role: "Approver", style: "btn-reject" },
-  ],
-  ITApproval: [
-    { action: "approve", label: "Approve", role: ["ITAgent", "ITAdmin"], style: "btn-approve" },
-    { action: "reject", label: "Reject", role: ["ITAgent", "ITAdmin"], style: "btn-reject" },
-  ],
-  Procurement: [
-    { action: "markOrdered", label: "Mark Ordered", role: "ITAdmin", style: "btn-secondary" },
-  ],
-  AwaitingSerialCapture: [
-    { action: "captureSerial", label: "Capture Serial & Fulfil", role: "ITAdmin", style: "btn-primary", requiresSerial: true },
-  ],
-};
 const TERMINAL_STATES = { Fulfilled: "good", Rejected: "bad" };
 function getSession() {
-  return {
-    upn: document.getElementById("sessionUpn").value.trim() || "unspecified@cognitionlearninggroup.com",
-    role: document.getElementById("sessionRole").value,
-  };
+  // Phase 1 identity: the API takes the caller from the sign-in token and ignores
+  // any UPN or role the page sends. Kept so older callers keep working.
+  const upn = (typeof signedInAccount !== "undefined" && signedInAccount && signedInAccount.username) || "";
+  return { upn: upn.toLowerCase(), role: "" };
 }
 async function apiCall(path, options = {}) {
   const url = `${API_BASE}${path}${path.includes("?") ? "&" : "?"}code=${FUNCTION_KEY}`;
@@ -744,21 +688,6 @@ function pillForState(state) {
   if (TERMINAL_STATES[state] === "good") return `<span class="pill pill-terminal-good">${state}</span>`;
   if (TERMINAL_STATES[state] === "bad") return `<span class="pill pill-terminal-bad">${state}</span>`;
   return `<span class="pill pill-active">${state}</span>`;
-}
-function mergeFieldsFromHistory(history) {
-  // Mirrors WorkflowInstance.get_fields()'s merge logic client-side — the
-  // GET /api/workflow/instance/{id} response already includes the raw
-  // 'history' array (each entry optionally carrying a 'fields' sub-object,
-  // per workflow_store.py's record_transition), so no separate endpoint is
-  // needed to reconstruct "current known field values" for display.
-  const merged = {};
-  (history || []).forEach(entry => {
-    if (entry.fields) Object.assign(merged, entry.fields);
-  });
-  return merged;
-}
-function localDescriptionKey(instanceId) {
-  return `hdreq_pending_description_${instanceId}`;
 }
 // Renders a "View Document" link if documentUrl is present, else an empty
 // string — used by both loadCertificates() and loadPolicies() below.
@@ -874,39 +803,6 @@ async function loadAuthMethodsWizard() {
   }
 }
 // ----------------------------------------------------------------------------
-// HD-036: Submit Hardware Request
-// ----------------------------------------------------------------------------
-document.getElementById("hwSubmitBtn").addEventListener("click", async () => {
-  const resultEl = document.getElementById("hwFormResult");
-  resultEl.innerHTML = "";
-  const session = getSession();
-  const description = document.getElementById("hwItemDescription").value.trim();
-  if (!description) {
-    resultEl.innerHTML = `<div class="error-box">Please enter an item description before submitting.</div>`;
-    return;
-  }
-  try {
-    const started = await apiCall("/workflow/start", {
-      method: "POST",
-      body: { workflowDefId: WORKFLOW_DEF_ID, requesterUpn: session.upn },
-    });
-    // Known MVP limitation (see module docstring above): cache the
-    // description locally so it can ride along on the next action taken
-    // against this instance from this same browser.
-    localStorage.setItem(localDescriptionKey(started.instanceId), description);
-    resultEl.innerHTML = `
-      <div class="success-box">
-        Request submitted — instance <code>${started.instanceId}</code>, starting state
-        <strong>${started.currentState}</strong>. It will auto-advance to Manager Approval within a
-        few seconds. Track it under the "My Requests" tab.
-      </div>`;
-    document.getElementById("hwItemDescription").value = "";
-    document.getElementById("hwJustification").value = "";
-  } catch (e) {
-    resultEl.innerHTML = `<div class="error-box">${e.message}</div>`;
-  }
-});
-// ----------------------------------------------------------------------------
 // HD-052/053: Policy Library + Certificate expiry cards
 // ----------------------------------------------------------------------------
 async function loadCertificates() {
@@ -971,198 +867,6 @@ async function loadPolicies() {
   }
 }
 document.getElementById("refreshPolicies").addEventListener("click", loadPolicies);
-// ----------------------------------------------------------------------------
-// My Requests (HD-036 tracking) — GET /api/workflow/myRequests
-// ----------------------------------------------------------------------------
-async function loadMyRequests() {
-  const listEl = document.getElementById("myRequestsList");
-  listEl.innerHTML = `<div class="empty-state">Loading…</div>`;
-  const session = getSession();
-  try {
-    const data = await apiCall(`/workflow/myRequests?requesterUpn=${encodeURIComponent(session.upn)}`);
-    if (!data.instances.length) {
-      listEl.innerHTML = `<div class="empty-state">No requests yet for ${session.upn}. Submit one from the Service Catalogue tab.</div>`;
-      return;
-    }
-    listEl.innerHTML = `
-      <table>
-        <thead><tr><th>Workflow</th><th>State</th><th>Created</th><th></th></tr></thead>
-        <tbody>
-          ${data.instances.map(i => `
-            <tr>
-              <td>${i.workflowDefId}</td>
-              <td>${pillForState(i.currentState)}</td>
-              <td>${i.createdAt}</td>
-              <td><button class="btn btn-secondary btn-sm" onclick="toggleDetail('${i.instanceId}', 'req')">Details</button></td>
-            </tr>
-            <tr id="detail-req-${i.instanceId}" style="display:none;"><td colspan="4"><div class="detail-panel" id="detail-body-req-${i.instanceId}"></div></td></tr>
-          `).join("")}
-        </tbody>
-      </table>`;
-  } catch (e) {
-    listEl.innerHTML = `<div class="error-box">${e.message}</div>`;
-  }
-}
-document.getElementById("refreshMyRequests").addEventListener("click", loadMyRequests);
-// ----------------------------------------------------------------------------
-// My Devices (HD-037) — GET /api/cmdb/ci?class=Hardware&owner=
-// ----------------------------------------------------------------------------
-async function loadMyDevices() {
-  const listEl = document.getElementById("myDevicesList");
-  listEl.innerHTML = `<div class="empty-state">Loading…</div>`;
-  const session = getSession();
-  try {
-    const data = await apiCall(`/cmdb/ci?class=Hardware&owner=${encodeURIComponent(session.upn)}`);
-    if (!data.items.length) {
-      listEl.innerHTML = `<div class="empty-state">No Hardware CIs currently linked to ${session.upn}.</div>`;
-      return;
-    }
-    listEl.innerHTML = `
-      <table>
-        <thead><tr><th>Name</th><th>Status</th><th>Entity</th><th>Created</th></tr></thead>
-        <tbody>
-          ${data.items.map(ci => `
-            <tr>
-              <td>${ci.name}</td>
-              <td><span class="pill pill-terminal-good">${ci.status}</span></td>
-              <td>${ci.entity || "—"}</td>
-              <td>${ci.createdAt}</td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>`;
-  } catch (e) {
-    listEl.innerHTML = `<div class="error-box">${e.message}</div>`;
-  }
-}
-document.getElementById("refreshMyDevices").addEventListener("click", loadMyDevices);
-// ----------------------------------------------------------------------------
-// My Approvals (HD-038) — GET /api/workflow/myApprovals + POST /api/workflow/action
-// ----------------------------------------------------------------------------
-async function loadMyApprovals() {
-  const listEl = document.getElementById("myApprovalsList");
-  listEl.innerHTML = `<div class="empty-state">Loading…</div>`;
-  const session = getSession();
-  try {
-    const data = await apiCall(`/workflow/myApprovals?role=${encodeURIComponent(session.role)}`);
-    if (!data.instances.length) {
-      listEl.innerHTML = `<div class="empty-state">Nothing awaiting the ${session.role} role right now.</div>`;
-      return;
-    }
-    listEl.innerHTML = data.instances.map(i => `
-      <div class="card" style="margin-bottom:0.75rem; box-shadow:none; border:1px solid var(--border); padding:1rem 1.25rem;">
-        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
-          <div>
-            <strong>${i.workflowDefId}</strong> — requested by ${i.requesterUpn || "unattributed"}
-            &nbsp;${pillForState(i.currentState)}
-          </div>
-          <button class="btn btn-secondary btn-sm" onclick="toggleDetail('${i.instanceId}', 'appr')">Details</button>
-        </div>
-        <div id="detail-appr-${i.instanceId}" style="display:none;">
-          <div class="detail-panel" id="detail-body-appr-${i.instanceId}"></div>
-        </div>
-        <div id="action-panel-${i.instanceId}"></div>
-      </div>
-    `).join("");
-    data.instances.forEach(i => renderActionPanel(i.instanceId, i.currentState, session));
-  } catch (e) {
-    listEl.innerHTML = `<div class="error-box">${e.message}</div>`;
-  }
-}
-document.getElementById("refreshMyApprovals").addEventListener("click", loadMyApprovals);
-function renderActionPanel(instanceId, currentState, session) {
-  const panelEl = document.getElementById(`action-panel-${instanceId}`);
-  const actions = STATE_ACTIONS[currentState];
-  if (!actions) { panelEl.innerHTML = ""; return; }
-  // Only show buttons the current session's declared role is actually
-  // permitted to use — mirrors check_role_permission's own normalize logic
-  // (a single role string or a list of acceptable roles).
-  const usable = actions.filter(a => {
-    const roles = Array.isArray(a.role) ? a.role : [a.role];
-    return roles.includes(session.role);
-  });
-  if (!usable.length) {
-    panelEl.innerHTML = `<p class="field-hint">Your declared role (${session.role}) cannot action this step. Switch role above to test as ${Array.isArray(actions[0].role) ? actions[0].role.join(" or ") : actions[0].role}.</p>`;
-    return;
-  }
-  const needsSerial = usable.some(a => a.requiresSerial);
-  panelEl.innerHTML = `
-    <div class="action-panel">
-      ${needsSerial ? `
-        <label class="field-label">Item description</label>
-        <input type="text" id="desc-${instanceId}" placeholder="e.g. Dell Latitude 5450 laptop" value="${localStorage.getItem(localDescriptionKey(instanceId)) || ""}">
-        <label class="field-label">Serial number <span style="color:var(--danger)">*required</span></label>
-        <input type="text" id="serial-${instanceId}" placeholder="e.g. SN-12345">
-        <p class="field-hint">Fulfilment is blocked until a non-blank serial number is captured (HD-033).</p>
-      ` : ""}
-      <div style="margin-top:0.75rem;">
-        ${usable.map(a => `<button class="btn ${a.style} btn-sm" onclick="performAction('${instanceId}', '${a.action}')">${a.label}</button>`).join("")}
-      </div>
-      <div id="action-result-${instanceId}"></div>
-    </div>`;
-}
-async function performAction(instanceId, action) {
-  const session = getSession();
-  const resultEl = document.getElementById(`action-result-${instanceId}`);
-  resultEl.innerHTML = "";
-  const fields = {};
-  const descInput = document.getElementById(`desc-${instanceId}`);
-  const serialInput = document.getElementById(`serial-${instanceId}`);
-  if (descInput && descInput.value.trim()) fields.itemDescription = descInput.value.trim();
-  if (serialInput) fields.serialNumber = serialInput.value.trim();
-  try {
-    const result = await apiCall("/workflow/action", {
-      method: "POST",
-      body: {
-        instanceId,
-        action,
-        callerRole: session.role,
-        callerUpn: session.upn,
-        fields,
-      },
-    });
-    let effectsMsg = "";
-    if (result.effects && result.effects.length) {
-      const ci = result.effects.find(e => e.effectType === "createCi");
-      if (ci && ci.ciId) effectsMsg = ` A new Hardware CI was created (${ci.ciId}) and linked to the requester.`;
-    }
-    resultEl.innerHTML = `<div class="success-box">Moved from ${result.previousState} to ${result.currentState}.${effectsMsg}</div>`;
-    if (result.currentState === "Fulfilled" || result.currentState === "Rejected") {
-      localStorage.removeItem(localDescriptionKey(instanceId));
-    }
-    setTimeout(loadMyApprovals, 1200);
-  } catch (e) {
-    resultEl.innerHTML = `<div class="error-box">${e.message}</div>`;
-  }
-}
-// ----------------------------------------------------------------------------
-// Shared: expand/collapse instance detail (history + approval chain)
-// ----------------------------------------------------------------------------
-async function toggleDetail(instanceId, prefix) {
-  // "req" rows use a wrapping <tr> (table layout); "appr" rows use a plain
-  // <div> (card layout) — target whichever wrapper actually exists for
-  // this prefix rather than assuming a specific DOM shape.
-  const rowEl = document.getElementById(`detail-${prefix}-${instanceId}`);
-  const bodyEl = document.getElementById(`detail-body-${prefix}-${instanceId}`);
-  const target = rowEl || bodyEl.parentElement;
-  if (target.style.display !== "none") { target.style.display = "none"; return; }
-  target.style.display = "block";
-  bodyEl.innerHTML = "Loading…";
-  try {
-    const view = await apiCall(`/workflow/instance/${instanceId}`);
-    const fields = mergeFieldsFromHistory(view.history);
-    bodyEl.innerHTML = `
-      ${Object.keys(fields).length ? `<p><strong>Captured fields:</strong> ${Object.entries(fields).map(([k, v]) => `${k}=${v}`).join(", ")}</p>` : ""}
-      <p><strong>History:</strong></p>
-      ${view.history.map(h => `<div class="hist-row">${h.from} → ${h.to} (${h.action}) — ${h.at}</div>`).join("") || "<em>No transitions yet.</em>"}
-      ${view.approvalChain.length ? `<p style="margin-top:0.5rem;"><strong>Approval chain:</strong></p>${view.approvalChain.map(a => `<div class="hist-row">Step ${a.stepOrder}: ${a.status} by ${a.approverUpn || "unattributed"} — ${a.actionedAt}</div>`).join("")}` : ""}
-    `;
-  } catch (e) {
-    bodyEl.innerHTML = `<div class="error-box">${e.message}</div>`;
-  }
-}
-// Sensible default session so the page is immediately usable on first load.
-document.getElementById("sessionUpn").value = "chris.yuen@cognitionlearninggroup.com";
 // HD-066/069: on page load, only check SILENTLY for an existing cached
 // Entra ID session — do NOT trigger an interactive loginPopup() here.
 // Browsers routinely block popups that aren't triggered by a direct user
@@ -1202,6 +906,7 @@ document.getElementById("sessionUpn").value = "chris.yuen@cognitionlearninggroup
 <script src="/tender/tender.js"></script>
 <script src="/knowledge/knowledge.js"></script>
 <script src="/software/software.js"></script>
+<script src="/requests/requests.js"></script>
 <script src="/home/home.js"></script>
 <script>
   // Shared guide links (#kb/<articleId>) open straight on the Knowledge Base tab.
