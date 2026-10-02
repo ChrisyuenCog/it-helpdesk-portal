@@ -279,6 +279,7 @@
   .doc-link:hover { text-decoration: underline; }
 </style>
 <link rel="stylesheet" href="/tender/tender.css">
+<link rel="stylesheet" href="/knowledge/knowledge.css">
 </head>
 <body>
 <header>
@@ -384,19 +385,8 @@
   </div>
   <!-- HD-045/047: Knowledge Base search + feedback -->
   <div class="view" id="view-knowledgeBase">
-    <div class="card">
-      <h2>Knowledge Base</h2>
-      <p class="subtitle">Search common IT questions before raising a ticket — most are self-resolvable in under a minute.</p>
-      <div class="row-flex">
-        <div>
-          <input type="text" id="kbQueryInput" placeholder="e.g. password, access, certificate, course">
-        </div>
-        <div style="flex:0 0 auto;">
-          <button class="btn btn-primary" id="kbSearchBtn" style="margin-top:0;">Search</button>
-        </div>
-      </div>
-      <div id="kbResults" style="margin-top:1rem;"><div class="empty-state">Type a keyword above and press Search — try "password", "access", "certificate", or "course".</div></div>
-    </div>
+    <!-- Knowledge Base v2 (web/knowledge/knowledge.js). Replaces the HD-045/047 search box; /api/kb/* still exists. -->
+    <div id="knowledgeApp"></div>
   </div>
   <!-- HD-052/053: Policy Library + Certificate expiry cards -->
   <div class="view" id="view-policyCompliance">
@@ -767,13 +757,14 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
     btn.classList.add("active");
     document.getElementById(`view-${btn.dataset.view}`).classList.add("active");
     document.querySelector("main").classList.toggle("wide", btn.dataset.view === "assetRegister");
-    document.querySelector("main").classList.toggle("medium", btn.dataset.view === "tenderPack");
+    document.querySelector("main").classList.toggle("medium", btn.dataset.view === "tenderPack" || btn.dataset.view === "knowledgeBase");
     if (btn.dataset.view === "myRequests") loadMyRequests();
     if (btn.dataset.view === "myDevices") loadMyDevices();
     if (btn.dataset.view === "myApprovals") loadMyApprovals();
     if (btn.dataset.view === "policyCompliance") { loadCertificates(); loadPolicies(); }
     if (btn.dataset.view === "assetRegister") loadAssetRegister();
     if (btn.dataset.view === "tenderPack" && window.TenderPack) window.TenderPack.open();
+    if (btn.dataset.view === "knowledgeBase" && window.KnowledgeBase) window.KnowledgeBase.open();
   });
 });
 // ----------------------------------------------------------------------------
@@ -872,75 +863,6 @@ document.getElementById("hwSubmitBtn").addEventListener("click", async () => {
     resultEl.innerHTML = `<div class="error-box">${e.message}</div>`;
   }
 });
-// ----------------------------------------------------------------------------
-// HD-045/047: Knowledge Base search + feedback
-// ----------------------------------------------------------------------------
-// A per-browser-session identifier for feedback attribution. HD-046's
-// backend deliberately treats every feedback submission as append-only
-// (never an upsert) — this sessionId is purely for that same-session
-// grouping, not an authentication identifier. Generated once and reused
-// for the lifetime of this browser tab's sessionStorage.
-function getKbSessionId() {
-  let sid = sessionStorage.getItem("hdkb_session_id");
-  if (!sid) {
-    sid = (crypto.randomUUID ? crypto.randomUUID() : `sess-${Date.now()}-${Math.random()}`);
-    sessionStorage.setItem("hdkb_session_id", sid);
-  }
-  return sid;
-}
-async function runKbSearch() {
-  const resultsEl = document.getElementById("kbResults");
-  const query = document.getElementById("kbQueryInput").value.trim();
-  if (!query) {
-    resultsEl.innerHTML = `<div class="error-box">Please enter a keyword to search for.</div>`;
-    return;
-  }
-  resultsEl.innerHTML = `<div class="empty-state">Searching…</div>`;
-  try {
-    const data = await apiCall(`/kb/search?query=${encodeURIComponent(query)}`);
-    if (!data.count) {
-      resultsEl.innerHTML = `<div class="empty-state">No articles matched "${data.query}". Try a different keyword, or raise a ticket if this doesn't resolve your issue.</div>`;
-      return;
-    }
-    resultsEl.innerHTML = data.results.map(article => `
-      <div class="card" style="margin-bottom:0.75rem; box-shadow:none; border:1px solid var(--border); padding:1.1rem 1.25rem;">
-        <h2 style="font-size:1rem;">${article.title}</h2>
-        <p style="color:var(--text); font-size:0.88rem; line-height:1.6;">${article.body}</p>
-        <div style="display:flex; align-items:center; gap:0.6rem; margin-top:0.75rem;">
-          <span class="field-hint" style="margin:0;">Was this helpful?</span>
-          <button class="btn btn-approve btn-sm" onclick="submitKbFeedback('${article.articleId}', true, this)">Yes</button>
-          <button class="btn btn-reject btn-sm" onclick="submitKbFeedback('${article.articleId}', false, this)">No</button>
-        </div>
-        <div id="kb-feedback-result-${article.articleId}"></div>
-      </div>
-    `).join("");
-  } catch (e) {
-    resultsEl.innerHTML = `<div class="error-box">${e.message}</div>`;
-  }
-}
-document.getElementById("kbSearchBtn").addEventListener("click", runKbSearch);
-document.getElementById("kbQueryInput").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") runKbSearch();
-});
-async function submitKbFeedback(articleId, helpful, buttonEl) {
-  const resultEl = document.getElementById(`kb-feedback-result-${articleId}`);
-  // Disable both Yes/No buttons for this article after the first click —
-  // the backend still happily accepts further submissions (HD-046 is
-  // append-only, not an upsert), but the UI intentionally nudges toward
-  // one considered response per view rather than repeated clicking.
-  const container = buttonEl.parentElement;
-  container.querySelectorAll("button").forEach(b => b.disabled = true);
-  try {
-    await apiCall("/kb/feedback", {
-      method: "POST",
-      body: { articleId, helpful, sessionId: getKbSessionId() },
-    });
-    resultEl.innerHTML = `<div class="success-box">Thanks for the feedback!</div>`;
-  } catch (e) {
-    resultEl.innerHTML = `<div class="error-box">${e.message}</div>`;
-    container.querySelectorAll("button").forEach(b => b.disabled = false);
-  }
-}
 // ----------------------------------------------------------------------------
 // HD-052/053: Policy Library + Certificate expiry cards
 // ----------------------------------------------------------------------------
@@ -1235,5 +1157,10 @@ document.getElementById("sessionUpn").value = "chris.yuen@cognitionlearninggroup
 })();
 </script>
 <script src="/tender/tender.js"></script>
+<script src="/knowledge/knowledge.js"></script>
+<script>
+  // Shared guide links (#kb/<articleId>) open straight on the Knowledge Base tab.
+  if (/^#kb\//.test(location.hash)) document.querySelector('.tab-btn[data-view="knowledgeBase"]').click();
+</script>
 </body>
 </html>
