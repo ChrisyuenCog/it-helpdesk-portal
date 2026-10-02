@@ -160,6 +160,8 @@ class WorkflowInstance:
         action: str,
         fields: Optional[Dict[str, Any]] = None,
         expected_approver_upn: Optional[str] = None,
+        actor_upn: Optional[str] = None,
+        comment: Optional[str] = None,
     ) -> None:
         """HD-026/030/033: 'fields' and 'expected_approver_upn' are OPTIONAL
         and embedded directly in this history entry — see this module's
@@ -176,6 +178,11 @@ class WorkflowInstance:
             entry["fields"] = dict(fields)
         if expected_approver_upn is not None:
             entry["expectedApproverUpn"] = expected_approver_upn
+        # Phase 1 audit trail: who took the step (from the sign-in token) and why.
+        if actor_upn:
+            entry["by"] = actor_upn
+        if comment:
+            entry["comment"] = comment
         self.history.append(entry)
         self.current_state = to_state
         self.updated_at = datetime.datetime.utcnow().isoformat()

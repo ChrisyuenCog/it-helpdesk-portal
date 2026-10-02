@@ -68,7 +68,7 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, List
 
 try:
@@ -117,6 +117,11 @@ class CallerIdentity:
     user_id: str
     user_name: Optional[str]
     group_ids: List[str]
+    # Phase 1 identity: a dependable UPN (preferred_username / upn claims only,
+    # never the display name), the display name, and any Entra app roles.
+    upn: Optional[str] = None
+    display_name: Optional[str] = None
+    roles: List[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -136,16 +141,30 @@ def _parse_client_principal(req: "func.HttpRequest") -> Optional[CallerIdentity]
     user_id = claims_payload.get("userId") or claims_payload.get("name")
     claims = claims_payload.get("claims", [])
     user_name = None
+    upn = None
+    display_name = None
     group_ids: List[str] = []
+    roles: List[str] = []
     for claim in claims:
         claim_type = claim.get("typ", "")
         claim_value = claim.get("val", "")
         if claim_type in ("name", "preferred_username", "upn"):
             user_name = user_name or claim_value
+        if claim_type in ("preferred_username", "upn", "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/upn"):
+            upn = upn or claim_value
+        if claim_type in ("name", "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name"):
+            display_name = display_name or claim_value
         if claim_type in ("groups", "http://schemas.microsoft.com/ws/2008/06/identity/claims/groups"):
             group_ids.append(claim_value)
+        if claim_type in ("roles", "http://schemas.microsoft.com/ws/2008/06/identity/claims/role"):
+            roles.append(claim_value)
+    if upn is None and user_name and "@" in user_name:
+        upn = user_name
+    if display_name and "@" in display_name and display_name == upn:
+        display_name = None
 
-    return CallerIdentity(user_id=user_id or "unknown", user_name=user_name, group_ids=group_ids)
+    return CallerIdentity(user_id=user_id or "unknown", user_name=user_name, group_ids=group_ids,
+                          upn=upn, display_name=display_name, roles=roles)
 
 
 def require_access_group(req: "func.HttpRequest") -> CallerIdentity:

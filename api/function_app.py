@@ -49,10 +49,12 @@ unauthenticated.
 """
 import json
 import logging
+import os
 import azure.functions as func
 import azure.durable_functions as df
 
 from workflow_store import get_store, WorkflowStoreError
+import workflow_access as wa
 from workflow_api import (
     parse_start_request,
     validate_workflow_def_id,
@@ -146,243 +148,201 @@ app = df.DFApp(http_auth_level=func.AuthLevel.FUNCTION)
 
 
 # ---------------------------------------------------------------------------
+# Phase 1 identity helpers: every workflow route works from the signed-in
+# caller (workflow_access.py). Query/body identity fields such as requesterUpn,
+# callerUpn and callerRole are ignored if a client still sends them.
+# ---------------------------------------------------------------------------
+def _caller_or_error(req):
+    try:
+        identity = require_access_group(req)
+    except AccessDeniedError as e:
+        return None, build_access_denied_response(str(e))
+    return wa.build_caller(identity, os.environ), None
+
+
+def _json(body, status=200):
+    return func.HttpResponse(json.dumps(body), mimetype="application/json", status_code=status)
+
+
+def _definitions_for(store, instances):
+    defs = {}
+    for i in instances:
+        if i.workflow_def_id not in defs:
+            try:
+                defs[i.workflow_def_id] = store.get_definition(i.workflow_def_id)
+            except WorkflowStoreError:
+                defs[i.workflow_def_id] = None
+    return defs
+
+
+@app.route(route="me", methods=["GET"])
+def me(req: func.HttpRequest) -> func.HttpResponse:
+    caller, err = _caller_or_error(req)
+    return err or _json(caller.to_api())
+
+
+@app.route(route="me/devices", methods=["GET"])
+def me_devices(req: func.HttpRequest) -> func.HttpResponse:
+    """Hardware CIs owned by the signed-in caller (e.g. delivered through a
+    hardware request). The IT Asset Register's devices are added by the page."""
+    caller, err = _caller_or_error(req)
+    if err:
+        return err
+    cis = get_cmdb_store().list_ci(ci_class="Hardware", owner=caller.upn)
+    return _json(build_ci_list_response(cis, "Hardware", caller.upn))
+
+
+# ---------------------------------------------------------------------------
 # HD-017: POST /api/workflow/start (generic, any workflowDefId)
 # ---------------------------------------------------------------------------
 @app.route(route="workflow/start", methods=["POST"])
 @app.durable_client_input(client_name="client")
 async def workflow_start(req: func.HttpRequest, client) -> func.HttpResponse:
-    try:
-        require_access_group(req)
-    except AccessDeniedError as e:
-        return build_access_denied_response(str(e))
+    caller, err = _caller_or_error(req)
+    if err:
+        return err
     try:
         parsed = parse_start_request(req.get_body())
-    except StartRequestValidationError as e:
-        return func.HttpResponse(
-            json.dumps(build_error_response(str(e))),
-            mimetype="application/json",
-            status_code=400,
-        )
+        body = json.loads(req.get_body() or b"{}")
+    except (StartRequestValidationError, ValueError) as e:
+        return _json(build_error_response(str(e)), 400)
     workflow_def_id = parsed["workflowDefId"]
-    requester_upn = parsed.get("requesterUpn")
     store = get_store()
     try:
         validate_workflow_def_id(store, workflow_def_id)
+        fields = wa.parse_start_fields(workflow_def_id, body, caller)
     except WorkflowStoreError as e:
-        return func.HttpResponse(
-            json.dumps(build_error_response(str(e))),
-            mimetype="application/json",
-            status_code=400,
-        )
+        return _json(build_error_response(str(e)), 400)
+    except wa.RequestValidationError as e:
+        return _json(build_error_response(str(e)), 400)
     try:
-        instance = store.create_instance(workflow_def_id, requester_upn=requester_upn)
+        instance = store.create_instance(workflow_def_id, requester_upn=caller.upn)
     except WorkflowStoreError as e:
-        return func.HttpResponse(
-            json.dumps(build_error_response(str(e))),
-            mimetype="application/json",
-            status_code=400,
-        )
+        return _json(build_error_response(str(e)), 400)
+    # Store the request's details on the server BEFORE the orchestrator starts,
+    # so the manager approval step can see them (previously they lived only in
+    # the requester's browser).
+    instance.record_transition(instance.current_state, instance.current_state, "submit",
+                               fields=fields, actor_upn=caller.upn)
+    store.save_instance(instance)
     orchestration_instance_id = await client.start_new(
         "generic_workflow_orchestrator",
         instance_id=instance.instance_id,
         client_input={"workflowDefId": workflow_def_id, "existingInstanceId": instance.instance_id},
     )
-    logging.info(
-        f"HD-017: started orchestration '{orchestration_instance_id}' for "
-        f"workflowDefId={workflow_def_id}, workflow_instance={instance.instance_id}, "
-        f"requesterUpn={requester_upn}"
-    )
+    logging.info(f"workflow start: {orchestration_instance_id} def={workflow_def_id} requester={caller.upn}")
     response_body = build_start_success_response(
-        instance_id=instance.instance_id,
-        workflow_def_id=workflow_def_id,
-        initial_state=instance.current_state,
+        instance_id=instance.instance_id, workflow_def_id=workflow_def_id, initial_state=instance.current_state,
     )
-    return func.HttpResponse(
-        json.dumps(response_body),
-        mimetype="application/json",
-        status_code=201,
-    )
-
+    response_body["reference"] = wa.reference(instance)
+    return _json(response_body, 201)
 
 # ---------------------------------------------------------------------------
 # HD-018: POST /api/workflow/action
 # ---------------------------------------------------------------------------
 @app.route(route="workflow/action", methods=["POST"])
 def workflow_action(req: func.HttpRequest) -> func.HttpResponse:
-    try:
-        require_access_group(req)
-    except AccessDeniedError as e:
-        return build_access_denied_response(str(e))
+    caller, err = _caller_or_error(req)
+    if err:
+        return err
     try:
         parsed = parse_action_request(req.get_body())
-    except ActionRequestValidationError as e:
-        return func.HttpResponse(
-            json.dumps(build_error_response(str(e))),
-            mimetype="application/json",
-            status_code=400,
-        )
+        body = json.loads(req.get_body() or b"{}")
+    except (ActionRequestValidationError, ValueError) as e:
+        return _json(build_error_response(str(e)), 400)
     store = get_store()
     try:
         instance = store.get_instance(parsed["instanceId"])
     except WorkflowStoreError as e:
-        return func.HttpResponse(
-            json.dumps(build_error_response(str(e))),
-            mimetype="application/json",
-            status_code=404,
-        )
+        return _json(build_error_response(str(e)), 404)
     try:
         definition = store.get_definition(instance.workflow_def_id)
     except WorkflowStoreError as e:
-        logging.error(
-            f"HD-018: instance {instance.instance_id} references unknown "
-            f"workflowDefId '{instance.workflow_def_id}': {e}"
-        )
-        return func.HttpResponse(
-            json.dumps(build_error_response("Internal data integrity error.")),
-            mimetype="application/json",
-            status_code=500,
-        )
+        logging.error(f"workflow action: {instance.instance_id} references unknown definition: {e}")
+        return _json(build_error_response("Internal data integrity error."), 500)
     try:
         transition = resolve_transition(definition, instance, parsed["action"])
     except ActionNotAllowedError as e:
-        return func.HttpResponse(
-            json.dumps(build_error_response(str(e))),
-            mimetype="application/json",
-            status_code=400,
-        )
-    try:
-        check_role_permission(transition, parsed["callerRole"])
-    except RoleNotPermittedError as e:
-        return func.HttpResponse(
-            json.dumps(build_error_response(str(e))),
-            mimetype="application/json",
-            status_code=403,
-        )
+        return _json(build_error_response(str(e)), 400)
+    allowed, why = wa.caller_can(transition, instance, caller)
+    if not allowed:
+        return _json(build_error_response(why), 403)
     try:
         check_required_fields(transition, parsed["fields"])
+        comment = wa.parse_comment(body, required=transition["to"] in wa.NEGATIVE_TERMINALS)
     except MissingRequiredFieldError as e:
-        return func.HttpResponse(
-            json.dumps(build_error_response(str(e))),
-            mimetype="application/json",
-            status_code=400,
-        )
-    from_state = instance.current_state
-    to_state = transition["to"]
-    expected_approver = resolve_expected_approver(transition, instance)
-    instance.record_transition(
-        from_state, to_state, parsed["action"],
-        fields=parsed["fields"], expected_approver_upn=expected_approver,
-    )
+        return _json(build_error_response(str(e)), 400)
+    except wa.RequestValidationError as e:
+        return _json(build_error_response(str(e)), 400)
+    from_state, to_state = instance.current_state, transition["to"]
+    expected = resolve_expected_approver(transition, instance) or wa.fallback_approver(transition, instance)
+    instance.record_transition(from_state, to_state, parsed["action"], fields=parsed["fields"],
+                               expected_approver_upn=expected, actor_upn=caller.upn, comment=comment)
     store.save_instance(instance)
     approval_entry = None
     if transition.get("requiredRole"):
-        status = determine_approval_status(parsed["action"])
-        approval_entry = store.append_approval_entry(
-            instance.instance_id, parsed["callerUpn"], status
-        )
-    cmdb_store = get_cmdb_store()
-    effects = apply_enter_effects(cmdb_store, instance, transition)
-    logging.info(
-        f"HD-018: instance {instance.instance_id} action='{parsed['action']}' "
-        f"{from_state} -> {to_state}"
-        + (f", approval_chain entry recorded (status={approval_entry.status})" if approval_entry else "")
-        + (f", expectedApprover={expected_approver}" if expected_approver else "")
-        + (f", effects={effects}" if effects else "")
-    )
+        approval_entry = store.append_approval_entry(instance.instance_id, caller.upn,
+                                                     determine_approval_status(parsed["action"]))
+    effects = apply_enter_effects(get_cmdb_store(), instance, transition)
+    logging.info(f"workflow action: {instance.instance_id} {parsed['action']} {from_state}->{to_state} by {caller.upn}")
     response_body = build_action_success_response(instance, transition, approval_entry, effects)
-    return func.HttpResponse(
-        json.dumps(response_body),
-        mimetype="application/json",
-        status_code=200,
-    )
-
+    response_body["request"] = wa.summarise(instance, definition, caller, detail=True)
+    return _json(response_body)
 
 # ---------------------------------------------------------------------------
 # HD-027: GET /api/workflow/instance/{instanceId}
 # ---------------------------------------------------------------------------
 @app.route(route="workflow/instance/{instanceId}", methods=["GET"])
 def workflow_get_instance(req: func.HttpRequest) -> func.HttpResponse:
-    try:
-        require_access_group(req)
-    except AccessDeniedError as e:
-        return build_access_denied_response(str(e))
+    caller, err = _caller_or_error(req)
+    if err:
+        return err
     try:
         instance_id = parse_instance_id(req.route_params.get("instanceId"))
-    except InstanceNotFoundError as e:
-        return func.HttpResponse(
-            json.dumps(build_error_response(str(e))),
-            mimetype="application/json",
-            status_code=404,
-        )
-    store = get_store()
-    try:
-        view = load_instance_view(store, instance_id)
-    except InstanceNotFoundError as e:
-        return func.HttpResponse(
-            json.dumps(build_error_response(str(e))),
-            mimetype="application/json",
-            status_code=404,
-        )
-    return func.HttpResponse(
-        json.dumps(view),
-        mimetype="application/json",
-        status_code=200,
-    )
-
+        store = get_store()
+        instance = store.get_instance(instance_id)
+    except (InstanceNotFoundError, WorkflowStoreError) as e:
+        return _json(build_error_response(str(e)), 404)
+    if not wa.can_view(instance, caller):
+        return _json(build_error_response("You don't have access to this request."), 403)
+    defs = _definitions_for(store, [instance])
+    view = load_instance_view(store, instance_id)
+    view["request"] = wa.summarise(instance, defs.get(instance.workflow_def_id), caller, detail=True)
+    return _json(view)
 
 # ---------------------------------------------------------------------------
 # HD-028: GET /api/workflow/myRequests?requesterUpn=
 # ---------------------------------------------------------------------------
 @app.route(route="workflow/myRequests", methods=["GET"])
 def workflow_my_requests(req: func.HttpRequest) -> func.HttpResponse:
-    try:
-        require_access_group(req)
-    except AccessDeniedError as e:
-        return build_access_denied_response(str(e))
-    try:
-        requester_upn = parse_my_requests_query(dict(req.params))
-    except MyRequestsValidationError as e:
-        return func.HttpResponse(
-            json.dumps(build_error_response(str(e))),
-            mimetype="application/json",
-            status_code=400,
-        )
+    caller, err = _caller_or_error(req)
+    if err:
+        return err
     store = get_store()
-    instances = store.get_instances_by_requester(requester_upn)
-    response_body = build_my_requests_response(instances, requester_upn)
-    return func.HttpResponse(
-        json.dumps(response_body),
-        mimetype="application/json",
-        status_code=200,
-    )
-
+    instances = store.get_instances_by_requester(caller.upn)
+    defs = _definitions_for(store, instances)
+    body = build_my_requests_response(instances, caller.upn)
+    body["requests"] = [wa.summarise(i, defs.get(i.workflow_def_id), caller, detail=True) for i in instances]
+    return _json(body)
 
 # ---------------------------------------------------------------------------
 # HD-029: GET /api/workflow/myApprovals?role=
 # ---------------------------------------------------------------------------
 @app.route(route="workflow/myApprovals", methods=["GET"])
 def workflow_my_approvals(req: func.HttpRequest) -> func.HttpResponse:
-    try:
-        require_access_group(req)
-    except AccessDeniedError as e:
-        return build_access_denied_response(str(e))
-    try:
-        role = parse_my_approvals_query(dict(req.params))
-    except MyApprovalsValidationError as e:
-        return func.HttpResponse(
-            json.dumps(build_error_response(str(e))),
-            mimetype="application/json",
-            status_code=400,
-        )
+    caller, err = _caller_or_error(req)
+    if err:
+        return err
     store = get_store()
-    instances = store.get_instances_pending_role(role)
-    response_body = build_my_approvals_response(instances, role)
-    return func.HttpResponse(
-        json.dumps(response_body),
-        mimetype="application/json",
-        status_code=200,
-    )
-
+    candidates = []
+    for role in wa.KNOWN_ROLES:
+        candidates.extend(store.get_instances_pending_role(role))
+    defs = _definitions_for(store, candidates)
+    pending = wa.pending_for(candidates, defs, caller)
+    body = build_my_approvals_response(pending, ",".join(sorted(caller.roles)) or "none")
+    body["requests"] = [wa.summarise(i, defs.get(i.workflow_def_id), caller, detail=True) for i in pending]
+    body["caller"] = caller.to_api()
+    return _json(body)
 
 # ---------------------------------------------------------------------------
 # HD-019: GET /api/cmdb/ci/{ciId}
@@ -463,17 +423,11 @@ def cmdb_get_relationships(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="identity/authMethods", methods=["GET"])
 def identity_get_auth_methods(req: func.HttpRequest) -> func.HttpResponse:
     try:
-        require_access_group(req)
+        identity = require_access_group(req)
     except AccessDeniedError as e:
         return build_access_denied_response(str(e))
-    try:
-        upn = parse_auth_methods_query(dict(req.params))
-    except AuthMethodsValidationError as e:
-        return func.HttpResponse(
-            json.dumps(build_error_response(str(e))),
-            mimetype="application/json",
-            status_code=400,
-        )
+    # Phase 1: always the signed-in caller's own account; a ?upn= value is ignored.
+    upn = wa.build_caller(identity, os.environ).upn
     methods = get_auth_methods(upn)
     response_body = build_auth_methods_response(upn, methods)
     return func.HttpResponse(
@@ -700,7 +654,7 @@ def advance_workflow_instance(instanceId: str) -> dict:
         return {"error": "No transition defined", "transition": None, "is_terminal": True}
     from_state = instance.current_state
     next_state = transition["to"]
-    expected_approver = resolve_expected_approver(transition, instance)
+    expected_approver = resolve_expected_approver(transition, instance) or wa.fallback_approver(transition, instance)
     instance.record_transition(from_state, next_state, action="advance", expected_approver_upn=expected_approver)
     store.save_instance(instance)
     cmdb_store = get_cmdb_store()
