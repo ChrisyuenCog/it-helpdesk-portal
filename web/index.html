@@ -280,6 +280,7 @@
 </style>
 <link rel="stylesheet" href="/tender/tender.css">
 <link rel="stylesheet" href="/knowledge/knowledge.css">
+<link rel="stylesheet" href="/software/software.css">
 </head>
 <body>
 <header>
@@ -307,6 +308,7 @@
   <button class="tab-btn" data-view="knowledgeBase">Knowledge Base</button>
   <button class="tab-btn" data-view="policyCompliance">Policy &amp; Compliance</button>
   <button class="tab-btn" data-view="tenderPack">Tender Pack</button>
+  <button class="tab-btn" data-view="softwareCatalogue">Software Catalogue</button>
   <button class="tab-btn" data-view="assetRegister">IT Asset Register</button>
 </nav>
 <main>
@@ -409,6 +411,9 @@
   </div>
   <div class="view" id="view-tenderPack">
     <div id="tenderApp"></div>
+  </div>
+  <div class="view" id="view-softwareCatalogue">
+    <div id="softwareApp"></div>
   </div>
   <div class="view" id="view-assetRegister">
     <div class="card" style="padding:1rem;">
@@ -757,7 +762,7 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
     btn.classList.add("active");
     document.getElementById(`view-${btn.dataset.view}`).classList.add("active");
     document.querySelector("main").classList.toggle("wide", btn.dataset.view === "assetRegister");
-    document.querySelector("main").classList.toggle("medium", btn.dataset.view === "tenderPack" || btn.dataset.view === "knowledgeBase");
+    document.querySelector("main").classList.toggle("medium", btn.dataset.view === "tenderPack" || btn.dataset.view === "knowledgeBase" || btn.dataset.view === "softwareCatalogue");
     if (btn.dataset.view === "myRequests") loadMyRequests();
     if (btn.dataset.view === "myDevices") loadMyDevices();
     if (btn.dataset.view === "myApprovals") loadMyApprovals();
@@ -765,6 +770,7 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
     if (btn.dataset.view === "assetRegister") loadAssetRegister();
     if (btn.dataset.view === "tenderPack" && window.TenderPack) window.TenderPack.open();
     if (btn.dataset.view === "knowledgeBase" && window.KnowledgeBase) window.KnowledgeBase.open();
+    if (btn.dataset.view === "softwareCatalogue" && window.SoftwareCatalogue) window.SoftwareCatalogue.open();
   });
 });
 // ----------------------------------------------------------------------------
@@ -1158,6 +1164,7 @@ document.getElementById("sessionUpn").value = "chris.yuen@cognitionlearninggroup
 </script>
 <script src="/tender/tender.js"></script>
 <script src="/knowledge/knowledge.js"></script>
+<script src="/software/software.js"></script>
 <script>
   // Shared guide links (#kb/<articleId>) open straight on the Knowledge Base tab.
   if (/^#kb\//.test(location.hash)) document.querySelector('.tab-btn[data-view="knowledgeBase"]').click();
