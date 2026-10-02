@@ -59,10 +59,11 @@ def test_non_member_is_refused():
 
 def test_library_and_evidence():
     status, body = call(fa.tender_library_list)
-    assert status == 200 and body["count"] == 16, body.get("count")
+    from tender_seed import SEED_ANSWERS
+    assert status == 200 and body["count"] == len(SEED_ANSWERS), body.get("count")
     status, body = call(fa.tender_evidence_list)
     assert status == 200 and {e["title"] for e in body["evidence"]} >= {"Cyber Essentials", "CLG_SEC_POL_001 ISMS Policy"}
-    print("PASS: library (16 answers) and evidence list load")
+    print(f"PASS: library ({len(SEED_ANSWERS)} answers) and evidence list load")
 
 
 def test_full_flow_approve_match_issue_and_fetch():

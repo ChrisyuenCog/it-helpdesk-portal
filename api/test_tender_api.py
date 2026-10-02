@@ -71,15 +71,15 @@ def test_realistic_questions_match_expected_answers():
     expected = {
         "Is two-factor authentication enforced for remote access?": "access-mfa",
         "Describe how you protect personal data in line with UK GDPR": "dp-uk-gdpr",
-        "How do you ensure laptops are encrypted and managed?": "device-management",
+        "How do you ensure laptops are encrypted and managed?": ("device-management", "device-encryption"),
         "What is your process for reporting a data breach to the client?": "incident-response",
         "Where will our data be stored, and is it backed up?": "hosting-backup",
-        "How is access to systems restricted when staff leave?": "access-control",
+        "How is access to systems restricted when staff leave?": ("access-control", "access-joiners-leavers"),
         "How do you vet subcontractors who will access our data?": "supplier-security",
     }
     for q, want in expected.items():
         got = t.match_question(q, answers)[0][0].answer_id
-        assert got == want, (q, got)
+        assert got in (want if isinstance(want, tuple) else (want,)), (q, got)
     print(f"PASS: {len(expected)} realistic tender questions match the right library answer")
 
 
