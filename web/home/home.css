@@ -1,0 +1,97 @@
+/* Support homepage (Service Catalogue tab). Uses the portal's brand tokens. */
+.sh-hero { position: relative; overflow: hidden; background: var(--brand-grey); border-radius: 14px; border-top: 5px solid var(--brand-orange);
+  padding: 2.2rem 2.2rem 1.9rem; color: #fff; margin-bottom: 1.25rem; }
+.sh-hero::after { content: ""; position: absolute; right: -80px; top: -60px; width: 320px; height: 320px; border-radius: 50%;
+  border: 46px solid rgba(244,123,32,0.18); pointer-events: none; z-index: 0; }
+.sh-hero > * { position: relative; z-index: 1; }
+.sh-hero h1 { margin: 0 0 0.35rem; font-size: 1.75rem; letter-spacing: -0.01em; color: #fff; position: relative; }
+.sh-hero p { margin: 0 0 1.2rem; color: #e8e8e8; font-size: 0.98rem; position: relative; max-width: 60ch; }
+.sh-search { position: relative; max-width: 720px; z-index: 2; }
+.sh-search input { width: 100%; padding: 1rem 1.1rem 1rem 3rem; border: 0; border-radius: 12px; font: inherit; font-size: 1.05rem; color: var(--text);
+  box-shadow: 0 6px 22px rgba(0,0,0,0.22); }
+.sh-search input:focus { outline: 3px solid var(--brand-orange); outline-offset: 2px; }
+.sh-search svg { position: absolute; left: 1.05rem; top: 50%; transform: translateY(-50%); width: 20px; height: 20px; color: #8a8a8a; pointer-events: none; }
+.sh-chips { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-top: 0.9rem; position: relative; z-index: 1; align-items: center; }
+.sh-chips span { font-size: 0.8rem; color: #dcdcdc; margin-right: 0.15rem; }
+.sh-chips button { font: inherit; font-size: 0.8rem; color: #fff; background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 999px; padding: 0.28rem 0.75rem; cursor: pointer; }
+.sh-chips button:hover { background: rgba(244,123,32,0.35); border-color: var(--brand-orange); }
+
+.sh-issue { display: flex; gap: 0.75rem; align-items: center; background: var(--tp-review-bg, #fff6e5); border: 1px solid #f2d39b; border-radius: 10px;
+  padding: 0.75rem 1rem; margin-bottom: 1.1rem; font-size: 0.9rem; color: #5c3600; }
+.sh-issue svg { flex: none; width: 20px; height: 20px; color: #a15c00; }
+.sh-issue button { margin-left: auto; font: inherit; font-size: 0.82rem; font-weight: 700; color: #8a4b00; background: none; border: 0; cursor: pointer; white-space: nowrap; }
+
+.sh-activity { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.85rem; margin-bottom: 1.6rem; }
+.sh-act { display: flex; gap: 0.9rem; align-items: center; text-align: left; font: inherit; background: #fff; border: 1px solid var(--border);
+  border-radius: 12px; padding: 1rem 1.1rem; cursor: pointer; transition: box-shadow 0.15s ease, transform 0.15s ease; }
+.sh-act:hover { box-shadow: 0 6px 18px rgba(0,0,0,0.08); transform: translateY(-1px); }
+.sh-act .ic { flex: none; width: 44px; height: 44px; border-radius: 10px; display: grid; place-items: center; background: var(--brand-orange-tint); color: var(--brand-orange-text); }
+.sh-act .ic svg { width: 22px; height: 22px; }
+.sh-act .n { font-size: 1.55rem; font-weight: 700; color: var(--brand-grey-dark); line-height: 1; }
+.sh-act .l { font-size: 0.84rem; color: var(--muted); margin-top: 0.2rem; }
+.sh-act.is-alert .n { color: var(--brand-orange-text); }
+.sh-signin { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 1rem; background: #fff; border: 1px dashed #cfd2d6;
+  border-radius: 12px; padding: 1rem 1.2rem; font-size: 0.9rem; color: var(--muted); }
+.sh-signin .btn { margin: 0; }
+
+.sh-h { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; margin: 0 0 0.75rem; }
+.sh-h h2 { margin: 0; font-size: 1.15rem; color: var(--brand-grey-dark); }
+.sh-h p, .sh-h button { margin: 0; font-size: 0.82rem; color: var(--muted); }
+.sh-h button { font: inherit; font-size: 0.84rem; font-weight: 700; color: var(--brand-orange-text); background: none; border: 0; cursor: pointer; }
+
+.sh-services { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.9rem; margin-bottom: 1.7rem; }
+.sh-svc { position: relative; display: flex; flex-direction: column; gap: 0.5rem; text-align: left; font: inherit; background: #fff; border: 1px solid var(--border);
+  border-radius: 12px; padding: 1.15rem 1.2rem 1.05rem; cursor: pointer; transition: box-shadow 0.15s ease, transform 0.15s ease, border-color 0.15s ease; }
+.sh-svc:hover { box-shadow: 0 8px 22px rgba(0,0,0,0.08); transform: translateY(-2px); border-color: #e5c9b0; }
+.sh-svc:focus-visible { outline: 3px solid var(--brand-orange); outline-offset: 2px; }
+.sh-svc .ic { width: 42px; height: 42px; border-radius: 10px; display: grid; place-items: center; background: var(--brand-grey); color: #fff; }
+.sh-svc .ic svg { width: 22px; height: 22px; }
+.sh-svc h3 { margin: 0.2rem 0 0; font-size: 1rem; color: var(--brand-grey-dark); }
+.sh-svc p { margin: 0; font-size: 0.85rem; color: #5f5f5f; line-height: 1.45; flex: 1; }
+.sh-svc .cta { font-size: 0.84rem; font-weight: 700; color: var(--brand-orange-text); }
+.sh-svc .badge { position: absolute; top: 1rem; right: 1rem; font-size: 0.68rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 999px;
+  color: #15803d; background: #ecfdf3; }
+.sh-svc.soon { cursor: default; background: #fafafa; }
+.sh-svc.soon:hover { transform: none; box-shadow: none; border-color: var(--border); }
+.sh-svc.soon .ic { background: #d8d9db; }
+.sh-svc.soon .badge { color: var(--muted); background: #ececec; }
+.sh-svc.soon .cta { color: var(--muted); font-weight: 600; }
+.sh-svc.is-open { border-color: var(--brand-orange); box-shadow: 0 0 0 2px rgba(244,123,32,0.25); }
+
+.sh-lower { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 1rem; margin-bottom: 1rem; }
+.sh-lower > div > .card { margin: 0 0 1rem; }
+.sh-guides { list-style: none; margin: 0; padding: 0; }
+.sh-guides li + li { border-top: 1px solid var(--border); }
+.sh-guides button { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 0.75rem; align-items: center; width: 100%; text-align: left; font: inherit;
+  background: none; border: 0; padding: 0.7rem 0.1rem; cursor: pointer; }
+.sh-guides .gi { width: 34px; height: 34px; border-radius: 8px; display: grid; place-items: center; background: #f1f2f4; color: var(--brand-grey-dark); }
+.sh-guides .gi svg { width: 17px; height: 17px; }
+.sh-guides .gt { font-weight: 600; color: var(--brand-grey-dark); font-size: 0.9rem; }
+.sh-guides .gs { font-size: 0.78rem; color: var(--muted); margin-top: 0.1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sh-guides .ga { color: #b5b5b5; font-size: 1.1rem; }
+.sh-guides button:hover .gt { color: var(--brand-orange-text); }
+.sh-panel h3 { margin: 0 0 0.35rem; font-size: 0.98rem; color: var(--brand-grey-dark); }
+.sh-panel p { margin: 0 0 0.75rem; font-size: 0.85rem; color: #5f5f5f; line-height: 1.5; }
+.sh-panel .row { display: flex; gap: 0.6rem; align-items: center; font-size: 0.88rem; margin: 0.35rem 0; color: var(--brand-grey-dark); }
+.sh-panel .row svg { width: 17px; height: 17px; color: var(--brand-orange-text); flex: none; }
+.sh-panel .row a { color: var(--brand-orange-text); font-weight: 600; }
+.sh-panel .btn { margin-top: 0.35rem; }
+.sh-panel.dark { background: var(--brand-grey-dark); color: #fff; }
+.sh-panel.dark h3 { color: #fff; }
+.sh-panel.dark p { color: #e3e3e3; }
+.sh-empty { font-size: 0.86rem; color: var(--muted); padding: 0.5rem 0; }
+
+/* Forms opened from the service cards keep their existing markup; give them a heading accent. */
+#hwRequestForm, #ssprPanel { border-top: 4px solid var(--brand-orange); scroll-margin-top: 1rem; }
+
+@media (max-width: 900px) {
+  .sh-services { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sh-activity { grid-template-columns: 1fr; }
+  .sh-lower { grid-template-columns: 1fr; }
+  .sh-hero { padding: 1.6rem 1.3rem; }
+  .sh-hero::after { display: none; }
+  .sh-hero h1 { font-size: 1.4rem; }
+}
+@media (max-width: 560px) { .sh-services { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .sh-svc, .sh-act { transition: none; } .sh-svc:hover, .sh-act:hover { transform: none; } }
