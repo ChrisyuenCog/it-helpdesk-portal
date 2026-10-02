@@ -119,6 +119,8 @@ from compliance_store import get_compliance_store
 from compliance_api import build_policies_response, build_certificates_response
 import datetime
 from tender_store import get_tender_store, TenderStoreError
+from knowledge_store import get_knowledge_store, KnowledgeStoreError
+import knowledge_api as kapi
 from tender_api import (
     TenderRequestError,
     build_evidence_index,
@@ -854,6 +856,127 @@ def tender_pack_get(req: func.HttpRequest) -> func.HttpResponse:
         pack = get_tender_store().get_pack(req.route_params.get("packId"))
         return _json_response({"pack": {**pack.to_list_item(), "snapshot": pack.snapshot}})
     return _tender_guard(handler)(req)
+
+
+# ---------------------------------------------------------------------------
+# Knowledge Base v2 — /api/knowledge/*  (the HD-045/046 /api/kb/* routes stay as they are)
+# ---------------------------------------------------------------------------
+# Readers see Approved articles; "drafts=true" shows drafts too, for the Manage
+# view. The portal is currently limited to the IT group, so every caller is an
+# editor; when Entra app roles land (roadmap Phase 1), restrict drafts=true and
+# the write routes to an editor role here.
+def _knowledge_guard(handler):
+    def wrapped(req: func.HttpRequest) -> func.HttpResponse:
+        try:
+            identity = require_access_group(req)
+        except AccessDeniedError as e:
+            return build_access_denied_response(str(e))
+        try:
+            return handler(req, identity)
+        except (kapi.KnowledgeRequestError, TenderRequestError) as e:
+            return _json_response(build_error_response(str(e)), 400)
+        except KnowledgeStoreError as e:
+            return _json_response(build_error_response(str(e)), 404)
+        except Exception:
+            logging.exception("knowledge route failed")
+            return _json_response(build_error_response("The knowledge base hit an unexpected error. Try again."), 500)
+    wrapped.__name__ = handler.__name__
+    return wrapped
+
+
+def _drafts(req) -> bool:
+    return (req.params.get("drafts") or "").lower() == "true"
+
+
+@app.route(route="knowledge/home", methods=["GET"])
+def knowledge_home(req: func.HttpRequest) -> func.HttpResponse:
+    def handler(req, identity):
+        return _json_response(kapi.build_home_response(get_knowledge_store().list_articles(), _drafts(req)))
+    return _knowledge_guard(handler)(req)
+
+
+@app.route(route="knowledge/search", methods=["GET"])
+def knowledge_search(req: func.HttpRequest) -> func.HttpResponse:
+    def handler(req, identity):
+        store = get_knowledge_store()
+        body, entry = kapi.build_search_response(req.params.get("q"), store.list_articles(), _drafts(req))
+        if not _drafts(req) and req.params.get("log") != "false":
+            store.log_search(entry)  # reader searches only; suggest-as-you-type passes log=false
+        return _json_response(body)
+    return _knowledge_guard(handler)(req)
+
+
+@app.route(route="knowledge/category", methods=["GET"])
+def knowledge_category(req: func.HttpRequest) -> func.HttpResponse:
+    def handler(req, identity):
+        return _json_response(kapi.build_category_response(str(req.params.get("name") or ""),
+                                                          get_knowledge_store().list_articles(), _drafts(req)))
+    return _knowledge_guard(handler)(req)
+
+
+@app.route(route="knowledge/articles", methods=["GET"])
+def knowledge_list(req: func.HttpRequest) -> func.HttpResponse:
+    def handler(req, identity):
+        store = get_knowledge_store()
+        arts = store.list_articles(include_retired=(req.params.get("includeRetired") or "").lower() == "true")
+        fb = store.list_feedback()
+        return _json_response({"count": len(arts), "articles": [
+            {**a.to_api(include_body=False), **kapi.rating_summary(a.article_id, fb)} for a in arts]})
+    return _knowledge_guard(handler)(req)
+
+
+@app.route(route="knowledge/articles/{articleId}", methods=["GET"])
+def knowledge_get(req: func.HttpRequest) -> func.HttpResponse:
+    def handler(req, identity):
+        store = get_knowledge_store()
+        a = store.get_article(req.route_params.get("articleId"))
+        body = kapi.build_article_response(a, store.list_articles(), store.list_feedback(), _drafts(req),
+                                           datetime.datetime.utcnow().date())
+        if a.status == "Approved" and not _drafts(req):
+            store.increment_views(a.article_id)
+        return _json_response(body)
+    return _knowledge_guard(handler)(req)
+
+
+@app.route(route="knowledge/articles", methods=["POST"])
+def knowledge_save(req: func.HttpRequest) -> func.HttpResponse:
+    def handler(req, identity):
+        body = _read_json(req)
+        store = get_knowledge_store()
+        existing = store.get_article(body["articleId"]) if body.get("articleId") else None
+        ids = [a.article_id for a in store.list_articles(include_retired=True)]
+        saved = store.upsert_article(kapi.apply_edit(body, existing, _caller_name(identity), ids))
+        return _json_response({"article": saved.to_api()})
+    return _knowledge_guard(handler)(req)
+
+
+@app.route(route="knowledge/articles/{articleId}/approve", methods=["POST"])
+def knowledge_approve(req: func.HttpRequest) -> func.HttpResponse:
+    def handler(req, identity):
+        store = get_knowledge_store()
+        a = store.get_article(req.route_params.get("articleId"))
+        saved = store.upsert_article(kapi.approve(a, _caller_name(identity), datetime.datetime.utcnow()))
+        return _json_response({"article": saved.to_api()})
+    return _knowledge_guard(handler)(req)
+
+
+@app.route(route="knowledge/feedback", methods=["POST"])
+def knowledge_feedback(req: func.HttpRequest) -> func.HttpResponse:
+    def handler(req, identity):
+        store = get_knowledge_store()
+        fb = kapi.parse_feedback(_read_json(req), {a.article_id: a for a in store.list_articles()}, _caller_name(identity))
+        store.add_feedback(fb)
+        return _json_response({"status": "ok"}, 201)
+    return _knowledge_guard(handler)(req)
+
+
+@app.route(route="knowledge/insights", methods=["GET"])
+def knowledge_insights(req: func.HttpRequest) -> func.HttpResponse:
+    def handler(req, identity):
+        store = get_knowledge_store()
+        return _json_response(kapi.build_insights(store.list_articles(include_retired=True), store.list_feedback(),
+                                                  store.list_search_log(), datetime.datetime.utcnow().date()))
+    return _knowledge_guard(handler)(req)
 
 
 # ---------------------------------------------------------------------------

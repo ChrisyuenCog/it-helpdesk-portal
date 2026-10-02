@@ -74,6 +74,7 @@ a an and are as at be by can could describe detail details do does for from has 
 include including is it its of on or our please provide state that the their there these this to
 we what when where whether which who will with would you your yours any all also confirm explain
 organisation organization company business ltd limited was were been being am
+my me mine im i'm myself get got
 """.split())
 
 _NUMBERING = re.compile(r"^\s*(?:q(?:uestion)?\s*)?(?:\d+(?:\.\d+)*|[a-z]|[ivx]+)[\.\):\-]\s+", re.IGNORECASE)
