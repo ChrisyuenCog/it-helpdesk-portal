@@ -101,6 +101,7 @@
   }
   /* IT Asset Register tab uses the full window width (toggled in tab code). */
   main.wide { max-width: none; }
+  main.medium { max-width: 1160px; }
   main {
     flex: 1;
     padding: 2rem;
@@ -277,6 +278,7 @@
   }
   .doc-link:hover { text-decoration: underline; }
 </style>
+<link rel="stylesheet" href="/tender/tender.css">
 </head>
 <body>
 <header>
@@ -303,6 +305,7 @@
   <button class="tab-btn" data-view="myApprovals">My Approvals</button>
   <button class="tab-btn" data-view="knowledgeBase">Knowledge Base</button>
   <button class="tab-btn" data-view="policyCompliance">Policy &amp; Compliance</button>
+  <button class="tab-btn" data-view="tenderPack">Tender Pack</button>
   <button class="tab-btn" data-view="assetRegister">IT Asset Register</button>
 </nav>
 <main>
@@ -317,7 +320,7 @@
         <div class="tile enabled" id="tile-sspr">Password / SSPR</div>
         <div class="tile disabled">Policy Library</div>
         <div class="tile disabled">Certificates</div>
-        <div class="tile disabled">Tender Pack</div>
+        <div class="tile enabled" id="tile-tender" role="button" tabindex="0">Tender Pack</div>
       </div>
     </div>
     <!-- HD-036: Hardware Request submission form -->
@@ -413,6 +416,9 @@
       </p>
       <div id="policyList"><div class="empty-state">Loading…</div></div>
     </div>
+  </div>
+  <div class="view" id="view-tenderPack">
+    <div id="tenderApp"></div>
   </div>
   <div class="view" id="view-assetRegister">
     <div class="card" style="padding:1rem;">
@@ -761,16 +767,25 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
     btn.classList.add("active");
     document.getElementById(`view-${btn.dataset.view}`).classList.add("active");
     document.querySelector("main").classList.toggle("wide", btn.dataset.view === "assetRegister");
+    document.querySelector("main").classList.toggle("medium", btn.dataset.view === "tenderPack");
     if (btn.dataset.view === "myRequests") loadMyRequests();
     if (btn.dataset.view === "myDevices") loadMyDevices();
     if (btn.dataset.view === "myApprovals") loadMyApprovals();
     if (btn.dataset.view === "policyCompliance") { loadCertificates(); loadPolicies(); }
     if (btn.dataset.view === "assetRegister") loadAssetRegister();
+    if (btn.dataset.view === "tenderPack" && window.TenderPack) window.TenderPack.open();
   });
 });
 // ----------------------------------------------------------------------------
 // HD-035: Service Catalogue — only Hardware Request is enabled/clickable
 // ----------------------------------------------------------------------------
+// Tender Pack tile opens the Tender Pack tab.
+document.getElementById("tile-tender").addEventListener("click", () => {
+  document.querySelector('.tab-btn[data-view="tenderPack"]').click();
+});
+document.getElementById("tile-tender").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); ev.currentTarget.click(); }
+});
 document.getElementById("tile-hardware").addEventListener("click", () => {
   const formEl = document.getElementById("hwRequestForm");
   formEl.style.display = formEl.style.display === "none" ? "block" : "none";
@@ -1219,5 +1234,6 @@ document.getElementById("sessionUpn").value = "chris.yuen@cognitionlearninggroup
   }, 500);
 })();
 </script>
+<script src="/tender/tender.js"></script>
 </body>
 </html>
