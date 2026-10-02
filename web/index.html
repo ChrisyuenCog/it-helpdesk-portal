@@ -281,6 +281,7 @@
 <link rel="stylesheet" href="/tender/tender.css">
 <link rel="stylesheet" href="/knowledge/knowledge.css">
 <link rel="stylesheet" href="/software/software.css">
+<link rel="stylesheet" href="/home/home.css">
 </head>
 <body>
 <header>
@@ -314,16 +315,51 @@
 <main>
   <!-- HD-035: Service Catalogue -->
   <div class="view active" id="view-catalogue">
-    <div class="card">
-      <h2>Service Catalogue</h2>
-      <p class="subtitle">Submit a request without emailing IT. Hardware Request is live — other categories are coming in later phases.</p>
-      <div class="grid">
-        <div class="tile enabled" id="tile-hardware">Hardware Request</div>
-        <div class="tile disabled">My Devices</div>
-        <div class="tile enabled" id="tile-sspr">Password / SSPR</div>
-        <div class="tile disabled">Policy Library</div>
-        <div class="tile disabled">Certificates</div>
-        <div class="tile enabled" id="tile-tender" role="button" tabindex="0">Tender Pack</div>
+    <!-- Support homepage. Service cards keep the original tile ids (tile-sspr, tile-hardware,
+         tile-tender) so the existing handlers below still open the forms; web/home/home.js adds
+         the greeting, search, known issues, activity and popular guides. -->
+    <section class="sh-hero" aria-labelledby="shTitle">
+      <h1 id="shTitle">How can we help today?</h1>
+      <p>Search step-by-step guides, request what you need, and keep track of it all in one place.</p>
+      <div class="sh-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="shQ" type="search" autocomplete="off" placeholder="Describe your problem, for example: forgot password, laptop stolen, 2FA" aria-label="Search for help" aria-controls="shSuggest">
+        <div id="shSuggest" class="kb-suggest" hidden></div>
+      </div>
+      <div class="sh-chips"><span>Popular:</span>
+        <button type="button" data-sh-q="reset password">Reset password</button><button type="button" data-sh-q="set up mfa">Set up MFA</button>
+        <button type="button" data-sh-q="laptop stolen">Lost or stolen laptop</button><button type="button" data-sh-q="phishing email">Phishing email</button>
+        <button type="button" data-sh-q="which ai tools can i use">AI tools</button></div>
+    </section>
+    <div id="shIssue"></div>
+    <div id="shActivity" class="sh-activity" aria-label="Your activity"></div>
+    <div class="sh-h"><h2>Get something done</h2><p>Available now, and what's coming next.</p></div>
+    <div class="sh-services">
+        <button type="button" class="sh-svc" id="tile-sspr"><span class="badge">Available</span><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 21 2M16 7l3 3M14 9l2 2"/></svg></span>
+          <h3>Reset your password</h3><p>Reset a forgotten password and check your sign-in methods, without waiting for IT.</p><span class="cta">Get started &rarr;</span></button>
+        <button type="button" class="sh-svc" id="tile-hardware"><span class="badge">Available</span><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/></svg></span>
+          <h3>Request hardware</h3><p>Ask for a laptop, monitor or accessory. Your manager approves it and IT handles the rest.</p><span class="cta">Make a request &rarr;</span></button>
+        <button type="button" class="sh-svc" data-sh-tab="knowledgeBase"><span class="badge">Available</span><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5V5a2 2 0 0 1 2-2h14v16H6a2 2 0 0 0-2 2z"/><path d="M8 7h8"/></svg></span>
+          <h3>Find a guide</h3><p>Step-by-step guides written by CLG IT, from MFA to lost devices and AI rules.</p><span class="cta">Browse guides &rarr;</span></button>
+        <button type="button" class="sh-svc" data-sh-tab="myDevices"><span class="badge">Available</span><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/></svg></span>
+          <h3>My devices</h3><p>See the laptops and phones registered to you, and report anything that's wrong.</p><span class="cta">View devices &rarr;</span></button>
+        <button type="button" class="sh-svc" data-sh-tab="policyCompliance"><span class="badge">Available</span><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="m9 12 2 2 4-4"/></svg></span>
+          <h3>Policies and certificates</h3><p>Read CLG's security policies and check certificate status before quoting them.</p><span class="cta">Open policies &rarr;</span></button>
+        <button type="button" class="sh-svc" id="tile-tender"><span class="badge">Available</span><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg></span>
+          <h3>Tender pack</h3><p>Answer a bid's IT and security questions with approved, evidence-backed wording.</p><span class="cta">Build a pack &rarr;</span></button>
+        <div class="sh-svc soon" aria-disabled="true"><span class="badge">Coming soon</span><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg></span>
+          <h3>Request software</h3><p>Ask for an application or licence, approved against the software catalogue.</p><span class="cta">Planned</span></div>
+        <div class="sh-svc soon" aria-disabled="true"><span class="badge">Coming soon</span><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg></span>
+          <h3>Report a problem</h3><p>Tell IT about a fault and track it through to a fix in the IT helpdesk.</p><span class="cta">Planned</span></div>
+    </div>
+    <div class="sh-lower">
+      <div class="card"><div class="sh-h"><h2>Popular guides</h2><button type="button" data-sh-tab="knowledgeBase">All guides &rarr;</button></div>
+        <ul class="sh-guides" id="shGuides"><li class="sh-empty">Guides appear here once you're signed in.</li></ul></div>
+      <div>
+        <div class="card sh-panel dark" id="shContact"></div>
+        <div class="card sh-panel"><h3>Working securely</h3>
+          <p>CLG's six security policies apply wherever you work. Lock your screen, use MFA, and report anything suspicious straight away. You won't be penalised for honest reporting.</p>
+          <button type="button" class="btn tp-btn-ghost" data-sh-tab="policyCompliance">Read the policies</button></div>
       </div>
     </div>
     <!-- HD-036: Hardware Request submission form -->
@@ -762,7 +798,7 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
     btn.classList.add("active");
     document.getElementById(`view-${btn.dataset.view}`).classList.add("active");
     document.querySelector("main").classList.toggle("wide", btn.dataset.view === "assetRegister");
-    document.querySelector("main").classList.toggle("medium", btn.dataset.view === "tenderPack" || btn.dataset.view === "knowledgeBase" || btn.dataset.view === "softwareCatalogue");
+    document.querySelector("main").classList.toggle("medium", btn.dataset.view === "tenderPack" || btn.dataset.view === "knowledgeBase" || btn.dataset.view === "softwareCatalogue" || btn.dataset.view === "catalogue");
     if (btn.dataset.view === "myRequests") loadMyRequests();
     if (btn.dataset.view === "myDevices") loadMyDevices();
     if (btn.dataset.view === "myApprovals") loadMyApprovals();
@@ -771,6 +807,7 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
     if (btn.dataset.view === "tenderPack" && window.TenderPack) window.TenderPack.open();
     if (btn.dataset.view === "knowledgeBase" && window.KnowledgeBase) window.KnowledgeBase.open();
     if (btn.dataset.view === "softwareCatalogue" && window.SoftwareCatalogue) window.SoftwareCatalogue.open();
+    if (btn.dataset.view === "catalogue" && window.SupportHome) window.SupportHome.open();
   });
 });
 // ----------------------------------------------------------------------------
@@ -1165,6 +1202,7 @@ document.getElementById("sessionUpn").value = "chris.yuen@cognitionlearninggroup
 <script src="/tender/tender.js"></script>
 <script src="/knowledge/knowledge.js"></script>
 <script src="/software/software.js"></script>
+<script src="/home/home.js"></script>
 <script>
   // Shared guide links (#kb/<articleId>) open straight on the Knowledge Base tab.
   if (/^#kb\//.test(location.hash)) document.querySelector('.tab-btn[data-view="knowledgeBase"]').click();
