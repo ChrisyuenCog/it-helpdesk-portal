@@ -335,6 +335,9 @@
       if (m) { openArticle(m[1], false); return; }
       if (!state.home) loadHome(); else render();
     },
+    // Used by the support homepage (web/home/home.js).
+    search: function (q) { bind(); state.view = "browse"; state.error = ""; runSearch(q); },
+    openArticle: function (id) { bind(); openArticle(id, false); },
     _renderBody: renderBody,
   };
 })();
