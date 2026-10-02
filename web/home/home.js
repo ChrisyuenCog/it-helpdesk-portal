@@ -98,19 +98,20 @@
     if (loading) return;
     loading = true;
     renderActivity({});
-    const session = getSession();
     const settle = (p) => p.then((v) => v, () => null);
+    // Same sources as the My Requests, My Approvals and My Devices tabs, so the counts always agree.
     const [reqs, appr, devs, home] = await Promise.all([
-      settle(apiCall(`/workflow/myRequests?requesterUpn=${encodeURIComponent(session.upn)}`)),
-      settle(apiCall(`/workflow/myApprovals?role=${encodeURIComponent(session.role)}`)),
-      settle(apiCall(`/cmdb/ci?class=Hardware&owner=${encodeURIComponent(session.upn)}`)),
+      settle(apiCall("/workflow/myRequests")),
+      settle(apiCall("/workflow/myApprovals")),
+      window.PortalDevices ? settle(window.PortalDevices.fetch()) : settle(apiCall("/me/devices").then((d) => ({ list: d.items || [] }))),
       settle(apiCall("/knowledge/home")),
     ]);
-    const terminal = typeof TERMINAL_STATES !== "undefined" ? TERMINAL_STATES : {};
+    const openCount = (r) => (r.requests ? r.requests.filter((x) => x.status === "open").length
+      : r.instances.filter((i) => !(typeof TERMINAL_STATES !== "undefined" && TERMINAL_STATES[i.currentState])).length);
     renderActivity({
-      open: reqs ? reqs.instances.filter((i) => !terminal[i.currentState]).length : null,
-      approvals: appr ? appr.instances.length : null,
-      devices: devs ? devs.items.length : null,
+      open: reqs ? openCount(reqs) : null,
+      approvals: appr ? (appr.requests || appr.instances || []).length : null,
+      devices: devs ? devs.list.length : null,
     });
     if (home) renderGuides(home);
     renderGreeting();
