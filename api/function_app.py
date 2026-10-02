@@ -117,6 +117,18 @@ from kb_api import (
 )
 from compliance_store import get_compliance_store
 from compliance_api import build_policies_response, build_certificates_response
+import datetime
+from tender_store import get_tender_store, TenderStoreError
+from tender_api import (
+    TenderRequestError,
+    build_evidence_index,
+    build_match_response,
+    evaluate_answer_choice,
+    build_pack,
+    apply_answer_edit,
+    approve_answer,
+    parse_deadline,
+)
 from auth_api import (
     require_access_group,
     build_access_denied_response,
@@ -701,6 +713,147 @@ def advance_workflow_instance(instanceId: str) -> dict:
         "transition": {"from": from_state, "to": next_state, "action": "advance"},
         "is_terminal": definition.is_terminal(next_state),
     }
+
+
+# ---------------------------------------------------------------------------
+# Tender Pack (Batch I, HD-054–058 widened) — /api/tender/*
+# ---------------------------------------------------------------------------
+# Every route: group check first; the caller's identity for audit fields
+# (preparedBy, updatedBy, approvedBy) comes from the sign-in token via
+# require_access_group(), never from the request body. Evidence is always
+# read live from Policy & Compliance (Strictly Confidential URLs redacted).
+def _json_response(body, status_code=200):
+    return func.HttpResponse(json.dumps(body), mimetype="application/json", status_code=status_code)
+
+
+def _caller_name(identity) -> str:
+    return identity.user_name or identity.user_id or "unknown"
+
+
+def _read_json(req):
+    try:
+        body = json.loads(req.get_body() or b"{}")
+    except (json.JSONDecodeError, ValueError):
+        raise TenderRequestError("Request body must be valid JSON.")
+    if not isinstance(body, dict):
+        raise TenderRequestError("Request body must be a JSON object.")
+    return body
+
+
+def _tender_evidence():
+    cmdb_store, compliance_store = get_cmdb_store(), get_compliance_store()
+    certs = build_certificates_response(cmdb_store, compliance_store)["certificates"]
+    policies = build_policies_response(cmdb_store, compliance_store)["policies"]
+    return build_evidence_index(certs, policies)
+
+
+def _tender_guard(handler):
+    """Shared auth + error mapping so each route stays a few lines."""
+    def wrapped(req: func.HttpRequest) -> func.HttpResponse:
+        try:
+            identity = require_access_group(req)
+        except AccessDeniedError as e:
+            return build_access_denied_response(str(e))
+        try:
+            return handler(req, identity)
+        except TenderRequestError as e:
+            return _json_response(build_error_response(str(e)), 400)
+        except TenderStoreError as e:
+            return _json_response(build_error_response(str(e)), 404)
+        except Exception:
+            logging.exception("tender route failed")
+            return _json_response(build_error_response("The tender service hit an unexpected error. Try again."), 500)
+    wrapped.__name__ = handler.__name__
+    return wrapped
+
+
+@app.route(route="tender/library", methods=["GET"])
+def tender_library_list(req: func.HttpRequest) -> func.HttpResponse:
+    def handler(req, identity):
+        include_retired = (req.params.get("includeRetired") or "").lower() == "true"
+        answers = get_tender_store().list_answers(include_retired=include_retired)
+        return _json_response({"count": len(answers), "answers": [a.to_api() for a in answers]})
+    return _tender_guard(handler)(req)
+
+
+@app.route(route="tender/library", methods=["POST"])
+def tender_library_save(req: func.HttpRequest) -> func.HttpResponse:
+    def handler(req, identity):
+        body = _read_json(req)
+        store = get_tender_store()
+        existing = store.get_answer(body["answerId"]) if body.get("answerId") else None
+        ids = [a.answer_id for a in store.list_answers(include_retired=True)]
+        saved = store.upsert_answer(apply_answer_edit(body, existing, _caller_name(identity), ids))
+        return _json_response({"answer": saved.to_api()})
+    return _tender_guard(handler)(req)
+
+
+@app.route(route="tender/library/{answerId}/approve", methods=["POST"])
+def tender_library_approve(req: func.HttpRequest) -> func.HttpResponse:
+    def handler(req, identity):
+        store = get_tender_store()
+        answer = store.get_answer(req.route_params.get("answerId"))
+        saved = store.upsert_answer(approve_answer(answer, _caller_name(identity), datetime.datetime.utcnow()))
+        return _json_response({"answer": saved.to_api()})
+    return _tender_guard(handler)(req)
+
+
+@app.route(route="tender/evidence", methods=["GET"])
+def tender_evidence_list(req: func.HttpRequest) -> func.HttpResponse:
+    def handler(req, identity):
+        docs = _tender_evidence()
+        return _json_response({"count": len(docs), "evidence": docs})
+    return _tender_guard(handler)(req)
+
+
+@app.route(route="tender/match", methods=["POST"])
+def tender_match(req: func.HttpRequest) -> func.HttpResponse:
+    def handler(req, identity):
+        body = _read_json(req)
+        result = build_match_response(body, get_tender_store().list_answers(), _tender_evidence(),
+                                      datetime.datetime.utcnow().date())
+        return _json_response(result)
+    return _tender_guard(handler)(req)
+
+
+@app.route(route="tender/evaluate", methods=["POST"])
+def tender_evaluate(req: func.HttpRequest) -> func.HttpResponse:
+    def handler(req, identity):
+        body = _read_json(req)
+        today = datetime.datetime.utcnow().date()
+        deadline = parse_deadline(body.get("deadline"), today)
+        answer = get_tender_store().get_answer(str(body.get("answerId") or ""))
+        return _json_response(evaluate_answer_choice(str(body.get("question") or ""), answer, _tender_evidence(), deadline, today))
+    return _tender_guard(handler)(req)
+
+
+@app.route(route="tender/packs", methods=["POST"])
+def tender_pack_create(req: func.HttpRequest) -> func.HttpResponse:
+    def handler(req, identity):
+        body = _read_json(req)
+        store = get_tender_store()
+        answers = {a.answer_id: a for a in store.list_answers(include_retired=True)}
+        pack = build_pack(body, answers, _tender_evidence(), _caller_name(identity), datetime.datetime.utcnow())
+        saved = store.create_pack(pack)
+        logging.info(f"tender pack {saved.pack_ref} issued by {saved.prepared_by} for {saved.client_name}")
+        return _json_response({"pack": {**saved.to_list_item(), "snapshot": saved.snapshot}}, 201)
+    return _tender_guard(handler)(req)
+
+
+@app.route(route="tender/packs", methods=["GET"])
+def tender_pack_list(req: func.HttpRequest) -> func.HttpResponse:
+    def handler(req, identity):
+        packs = get_tender_store().list_packs()
+        return _json_response({"count": len(packs), "packs": [p.to_list_item() for p in packs]})
+    return _tender_guard(handler)(req)
+
+
+@app.route(route="tender/packs/{packId}", methods=["GET"])
+def tender_pack_get(req: func.HttpRequest) -> func.HttpResponse:
+    def handler(req, identity):
+        pack = get_tender_store().get_pack(req.route_params.get("packId"))
+        return _json_response({"pack": {**pack.to_list_item(), "snapshot": pack.snapshot}})
+    return _tender_guard(handler)(req)
 
 
 # ---------------------------------------------------------------------------
