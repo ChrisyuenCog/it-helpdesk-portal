@@ -14,6 +14,7 @@ Body format (rendered safely by web/knowledge/knowledge.js): "## " headings,
 Generate the SQL: python knowledge_seed.py > ../db/schema_and_seed_knowledge.sql
 """
 import json
+import re
 
 P1, P2, P3, P4, P5, P6 = (f"CLG_SEC_POL_00{i}" for i in range(1, 7))
 BCP = "CLG Business Continuity Plan"
@@ -552,7 +553,22 @@ Update the certificate in Policy & Compliance once the new CE+ certificate is is
 
 
 def _s(v):
-    return "NULL" if v is None else "N'" + str(v).replace("'", "''") + "'"
+    """SQL string literal that survives the Azure portal Query editor.
+    That editor splits scripts into batches at the word GO (the SQL Server batch
+    separator) wherever it appears, even inside a string such as "1. Go to…", and
+    the split leaves an unclosed quote. So: line breaks become NCHAR(10) joins
+    (each statement stays on one line), and every standalone "go" is broken into
+    two joined pieces, N'G' + N'o', which the editor cannot match."""
+    if v is None:
+        return "NULL"
+    pieces = []
+    for line in str(v).split("\n"):
+        esc = line.replace("'", "''")
+        esc = re.sub(r"(?i)\b(g)(o)\b", r"\1' + N'\2", esc)
+        pieces.append("N'" + esc + "'")
+    if len(pieces) == 1 and "' + N'" not in pieces[0]:
+        return pieces[0]
+    return "CAST(N'' AS NVARCHAR(MAX)) + " + " + NCHAR(10) + ".join(pieces)
 
 
 def render_sql() -> str:
